@@ -1,0 +1,8 @@
+filePaths:
+    dirRaw: '../cluster/data/medinfmk/side-effects/raw/'
+    dirRawFiles:
+        drug-names: 'drug_names.tsv'
+    dirProcessed: '../cluster/data/medinfmk/side-effects/processed/'
+    dirProcessedFiles:
+        drug-se: 'meddra_all_se.PT.Drug-SE.tsv'
+        dirPickles: '../cluster/data/medinfmk/side-effects/processed/pickles/'
