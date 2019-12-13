@@ -10,3 +10,4 @@ filePaths:
     dirProcessedFiles:
         drug-se: 'meddra_all_se.PT.Drug-SE.tsv'
         dirPickles: '../cluster/data/medinfmk/ddi/processed/pickles/'
+        dirRuns: '../cluster/data/medinfmk/ddi/processed/runs/'
