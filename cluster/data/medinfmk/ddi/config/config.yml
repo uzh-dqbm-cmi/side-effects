@@ -6,6 +6,7 @@ filePaths:
         - DS3
     dirRawFiles:
         drug-names: 'drug_names.tsv'
+        paper-individual-metrics-scores: '../cluster/data/medinfmk/ddi/raw/DS1/paper_individual_metrics_scores.csv'
     dirProcessed: '../cluster/data/medinfmk/ddi/processed/'
     dirProcessedFiles:
         drug-se: 'meddra_all_se.PT.Drug-SE.tsv'
