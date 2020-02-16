@@ -62,6 +62,7 @@ def build_performance_dfs(similarity_types, target_dir, num_folds, dsettype):
     auc_df = pd.DataFrame()
     aupr_df = pd.DataFrame()
     f1_df = pd.DataFrame()
+    target_dir = create_directory(target_dir)
     for sim_type in similarity_types:
         s_auc , s_aupr, s_f1 = get_performance_results(sim_type, target_dir, num_folds, dsettype)
         auc_df = pd.concat([auc_df, s_auc], sort=True)

@@ -93,6 +93,15 @@ def preprocess_labels(interaction_fpath):
     r, c = np.triu_indices(len(interaction_matrix),1) # take indices off the diagnoal by 1
     return interaction_matrix[r,c]
 
+def create_setvector_features(X, num_sim_types):
+    """reshape concatenated features from every similarity type matrix into set of vectors per ddi example"""
+    e = X[np.newaxis, :, :]
+    f = np.transpose(e, axes=(0, 2, 1))
+    splitter = 2*num_sim_types 
+    g = np.concatenate(np.split(f, splitter, axis=1), axis=0)
+    h = np.transpose(g, axes=(2,0, 1))
+    return h
+
 def get_stratified_partitions(ddi_datatensor, num_folds=5, valid_set_portion=0.1, random_state=42):
     """Generate 5-fold stratified sample of drug-pair ids based on the interaction label
 
