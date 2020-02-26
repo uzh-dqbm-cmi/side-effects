@@ -39,6 +39,7 @@ def get_performance_results(similarity_type, target_dir, num_folds, dsettype):
                                 'fold_{}'.format(fold_num))
 
         score_file = os.path.join(fold_dir, 'score_{}.pkl'.format(dsettype))
+        # print(score_file)
         if os.path.isfile(score_file):
             mscore = ReaderWriter.read_data(score_file)
             perf_dict[0]['fold{}'.format(fold_num)] = mscore.s_auc
@@ -63,8 +64,9 @@ def build_performance_dfs(similarity_types, target_dir, num_folds, dsettype):
     aupr_df = pd.DataFrame()
     f1_df = pd.DataFrame()
     target_dir = create_directory(target_dir)
+    print(target_dir)
     for sim_type in similarity_types:
-        s_auc , s_aupr, s_f1 = get_performance_results(sim_type, target_dir, num_folds, dsettype)
+        s_auc, s_aupr, s_f1 = get_performance_results(sim_type, target_dir, num_folds, dsettype)
         auc_df = pd.concat([auc_df, s_auc], sort=True)
         aupr_df = pd.concat([aupr_df, s_aupr], sort=True)
         f1_df = pd.concat([f1_df, s_f1], sort=True)
