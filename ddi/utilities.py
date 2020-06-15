@@ -5,7 +5,7 @@ import torch
 import numpy as np
 import pandas as pd
 from sklearn.metrics import classification_report, f1_score, roc_curve, precision_recall_curve, accuracy_score, \
-                            recall_score, precision_score, roc_auc_score, auc
+                            recall_score, precision_score, roc_auc_score, auc, average_precision_score
 from matplotlib import pyplot as plt
 
 
@@ -201,7 +201,7 @@ def get_interaction_stat(matrix):
     print('number of zero elements', zero_elem)
     print('diagnoal elements ', np.diag(matrix))
 
-def perfmetric_report(pred_target, ref_target, probscore, epoch, outlog, plot_roc=True):
+def perfmetric_report(pred_target, ref_target, probscore, epoch, outlog):
 
     # print(ref_target.shape)
     # print(pred_target.shape)
@@ -242,10 +242,10 @@ def perfmetric_report(pred_target, ref_target, probscore, epoch, outlog, plot_ro
 
 def plot_precision_recall_curve(ref_target, prob_poslabel, figname, outdir):
     pr, rec, thresholds = precision_recall_curve(ref_target, prob_poslabel)
+    avg_precision = average_precision_score(ref_target, prob_poslabel)
     thresholds[0] = 1
     plt.figure(figsize=(9, 6))
-    plt.plot(pr, rec, 'bo', label='Precision vs Recall')
-    # plt.plot(np.arange(0,len(thresholds)), thresholds, 'r-', label='thresholds')
+    plt.plot(rec, pr, 'b+', label=f'Average Precision (AP):{avg_precision:.2}')
     plt.xlabel('Precision')
     plt.ylabel('Recall')
     plt.title('Precision vs. recall curve')
@@ -258,7 +258,7 @@ def plot_roc_curve(ref_target, prob_poslabel, figname, outdir):
     fpr, tpr, thresholds = roc_curve(ref_target, prob_poslabel)
     thresholds[0] = 1
     plt.figure(figsize=(9, 6))
-    plt.plot(fpr, tpr, 'bo', label='TPR vs FPR')
+    plt.plot(fpr, tpr, 'b+', label='TPR vs FPR')
     plt.plot(fpr, thresholds, 'r-', label='thresholds')
     plt.xlabel('False positive rate')
     plt.ylabel('True positive rate')
@@ -268,17 +268,79 @@ def plot_roc_curve(ref_target, prob_poslabel, figname, outdir):
     plt.close()
 
 
-def plot_loss(epoch_loss_avgbatch, epoch_loss_avgsamples, wrk_dir):
+# def plot_loss(epoch_loss_avgbatch, epoch_loss_avgsamples, wrk_dir):
+#     dsettypes = epoch_loss_avgbatch.keys()
+#     for dsettype in dsettypes:
+#         plt.figure(figsize=(9, 6))
+#         plt.plot(epoch_loss_avgbatch[dsettype], 'r', epoch_loss_avgsamples[dsettype], 'b')
+#         plt.xlabel("number of epochs")
+#         plt.ylabel("negative loglikelihood cost")
+#         plt.legend(['epoch batch average loss', 'epoch training samples average loss'])
+#         plt.savefig(os.path.join(wrk_dir, os.path.join(dsettype + ".pdf")))
+#         plt.close()
+
+def plot_loss(epoch_loss_avgbatch, wrk_dir):
     dsettypes = epoch_loss_avgbatch.keys()
     for dsettype in dsettypes:
         plt.figure(figsize=(9, 6))
-        plt.plot(epoch_loss_avgbatch[dsettype], 'r', epoch_loss_avgsamples[dsettype], 'b')
+        plt.plot(epoch_loss_avgbatch[dsettype], 'r')
         plt.xlabel("number of epochs")
         plt.ylabel("negative loglikelihood cost")
-        plt.legend(['epoch batch average loss', 'epoch training samples average loss'])
+        plt.legend(['epoch batch average loss'])
         plt.savefig(os.path.join(wrk_dir, os.path.join(dsettype + ".pdf")))
         plt.close()
 
+
+def plot_xy(x, y, xlabel, ylabel, legend, fname, wrk_dir):
+    plt.figure(figsize=(9, 6))
+    plt.plot(x, y, 'r')
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    if legend:
+        plt.legend([legend])
+    plt.savefig(os.path.join(wrk_dir, os.path.join(fname + ".pdf")))
+    plt.close()
+
+def find_youdenj_threshold(ref_target, prob_poslabel, fig_dir=None):
+    fpr, tpr, thresholds = roc_curve(ref_target, prob_poslabel)
+    s_auc = roc_auc_score(ref_target, prob_poslabel)
+    thresholds[0] = 1
+    plt.figure(figsize=(9, 6))
+    plt.plot(fpr, tpr, 'b+', label=f'TPR vs FPR => AUC:{s_auc:.2}')
+#     plt.plot(fpr, thresholds, 'r-', label='thresholds')
+    plt.xlabel('False positive rate')
+    plt.ylabel('True positive rate')
+    plt.title('ROC curve')
+    # youden index is max(sensitivity + specificity - 1)
+    # max(tpr + (1-fpr) - 1)
+    # max(tpr - fpr)
+    youden_indx = np.argmax(tpr - fpr) # the index where the difference between tpr and fpr is max
+    optimal_threshold = thresholds[youden_indx]
+    plt.plot(fpr[youden_indx], tpr[youden_indx], marker='o', markersize=3, color="red", label=f'optimal probability threshold:{optimal_threshold:.2}')
+    plt.legend(loc='best')
+    if fig_dir:
+        plt.savefig(f'{fig_dir}.pdf')
+        plt.close()
+    return fpr, tpr, thresholds, optimal_threshold
+
+def analyze_precision_recall_curve(ref_target, prob_poslabel, fig_dir=None):
+    pr, rec, thresholds = precision_recall_curve(ref_target, prob_poslabel)
+    avg_precision = average_precision_score(ref_target, prob_poslabel)
+    thresholds[0] = 1
+    plt.figure(figsize=(9, 6))
+    plt.plot(rec, pr, 'b+', label=f'Precision vs Recall => Average Precision (AP):{avg_precision:.2}')
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.title('Precision vs. recall curve')
+    indx = np.argmax(pr + rec)
+    print('indx', indx)
+    optimal_threshold = thresholds[indx]
+    plt.plot(rec[indx], pr[indx], marker='o', markersize=3, color="red", label=f'optimal probability threshold:{optimal_threshold:.2}')
+    plt.legend(loc='best')
+    if fig_dir:
+        plt.savefig(f'{fig_dir}.pdf')
+        plt.close()
+    return pr, rec, thresholds, optimal_threshold
 
 def delete_directory(directory):
     if(os.path.isdir(directory)):

@@ -58,7 +58,6 @@ def construct_load_dataloaders(dataset_fold, dsettypes, config, wrk_dir):
     # setup data loaders
     data_loaders = {}
     epoch_loss_avgbatch = {}
-    epoch_loss_avgsamples = {}
     flog_out = {}
     score_dict = {}
     class_weights = {}
@@ -75,19 +74,19 @@ def construct_load_dataloaders(dataset_fold, dsettypes, config, wrk_dir):
                                             num_workers=config['num_workers'])
 
         epoch_loss_avgbatch[dsettype] = []
-        epoch_loss_avgsamples[dsettype] = []
         score_dict[dsettype] = ModelScore(0, 0.0, 0.0, 0.0, 0.0, 0.0)  # (best_epoch, auc, aupr, f1, precision, recall)
         if(wrk_dir):
             flog_out[dsettype] = os.path.join(wrk_dir, dsettype + ".log")
         else:
             flog_out[dsettype] = None
 
-    return (data_loaders, epoch_loss_avgbatch, epoch_loss_avgsamples, score_dict, class_weights, flog_out)
+    return (data_loaders, epoch_loss_avgbatch, score_dict, class_weights, flog_out)
 
 def preprocess_features(feat_fpath):
     X_fea = np.loadtxt(feat_fpath,dtype=float,delimiter=",")
     r, c = np.triu_indices(len(X_fea),1) # take indices off the diagnoal by 1
     return np.concatenate((X_fea[r], X_fea[c]), axis=1)
+
 def preprocess_labels(interaction_fpath):
     interaction_matrix = np.loadtxt(interaction_fpath,dtype=float,delimiter=",")
     r, c = np.triu_indices(len(interaction_matrix),1) # take indices off the diagnoal by 1
@@ -102,7 +101,7 @@ def create_setvector_features(X, num_sim_types):
     h = np.transpose(g, axes=(2,0, 1))
     return h
 
-def get_stratified_partitions(ddi_datatensor, num_folds=5, valid_set_portion=0.1, random_state=42):
+def get_stratified_partitions(ddi_datatensor, num_folds=5, random_state=42):
     """Generate 5-fold stratified sample of drug-pair ids based on the interaction label
 
     Args:
@@ -127,6 +126,32 @@ def get_stratified_partitions(ddi_datatensor, num_folds=5, valid_set_portion=0.1
         print("-"*25)
     return(data_partitions)
 
+def get_validation_partitions(ddi_datatensor, num_folds=2, valid_set_portion=0.1, random_state=42):
+    """Generate stratified train/validation split of drug-pair ids based on the interaction label
+
+    Args:
+        ddi_datatensor: instance of :class:`DDIDataTensor`
+    """
+    skf_trte = StratifiedShuffleSplit(n_splits=num_folds, 
+                                      test_size=valid_set_portion, 
+                                      random_state=random_state)  # split train and test
+    data_partitions = {}
+    X = ddi_datatensor.X_feat
+    y = ddi_datatensor.y
+    fold_num = 0
+    for train_index, test_index in skf_trte.split(X,y):
+    
+        data_partitions[fold_num] = {'train': train_index,
+                                     'validation': test_index}
+        print("fold_num:", fold_num)
+        print('train data')
+        report_label_distrib(y[train_index])
+        print('validation data')
+        report_label_distrib(y[test_index])
+        print()
+        fold_num += 1
+        print("-"*25)
+    return(data_partitions)
 
 def report_label_distrib(labels):
     classes, counts = np.unique(labels, return_counts=True)
@@ -168,6 +193,8 @@ def generate_partition_datatensor(ddi_datatensor, data_partitions):
             target_ids = data_partitions[fold_num][dsettype]
             datatensor_partition = PartitionDataTensor(ddi_datatensor, target_ids, dsettype, fold_num)
             datatensor_partitions[fold_num][dsettype] = datatensor_partition
+    compute_class_weights_per_fold_(datatensor_partitions)
+
     return(datatensor_partitions)
 
 def build_datatensor_partitions(data_partitions, ddi_datatensor):
