@@ -95,10 +95,14 @@ def preprocess_labels(interaction_fpath):
 def create_setvector_features(X, num_sim_types):
     """reshape concatenated features from every similarity type matrix into set of vectors per ddi example"""
     e = X[np.newaxis, :, :]
+    # print('e.shape', e.shape)
     f = np.transpose(e, axes=(0, 2, 1))
+    # print('f.shape', f.shape)
     splitter = 2*num_sim_types 
     g = np.concatenate(np.split(f, splitter, axis=1), axis=0)
+    # print('g.shape', g.shape)
     h = np.transpose(g, axes=(2,0, 1))
+    # print('h.shape', h.shape)
     return h
 
 def get_stratified_partitions(ddi_datatensor, num_folds=5, random_state=42):
