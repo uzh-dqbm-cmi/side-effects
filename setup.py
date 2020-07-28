@@ -11,6 +11,8 @@ setup(name='ddi',
             'pandas',
             'scipy',
             'scikit-learn',
-            'torch'
+            'torch',
+            'matplotlib',
+            'seaborn'
       ],
       zip_safe=False)
