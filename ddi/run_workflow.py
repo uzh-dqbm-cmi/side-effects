@@ -95,29 +95,32 @@ def dump_dict_content(dsettype_content_map, dsettypes, desc, wrk_dir):
     for dsettype in dsettypes:
         path = os.path.join(wrk_dir, '{}_{}.pkl'.format(desc, dsettype))
         ReaderWriter.dump_data(dsettype_content_map[dsettype], path)
+def get_random_fold(num_folds, random_seed=42):
+    np.random.seed(random_seed)
+    fold_num = np.random.randint(num_folds)
+    return fold_num
 
 def hyperparam_model_search(data_partitions, similarity_type, model_name,
-                            input_dim, root_dir, run_gpu_map, loss_func='nllloss', 
+                            input_dim, root_dir, fold_gpu_map, loss_func='nllloss', 
                             fdtype=torch.float32, num_epochs=25,
                             prob_interval_truemax=0.05, prob_estim=0.95, random_seed=42,
                             per_base=False):
     # fold_num = get_random_run(len(data_partitions), random_seed=random_seed)
-    fold_num = 0
+    fold_num = get_random_fold(len(data_partitions), random_seed=random_seed)
     dsettypes = ['train', 'validation']
     hyperparam_options = get_hyperparam_options(prob_interval_truemax, prob_estim, model_name)
-    data_partition = data_partitions[run_num]
+    data_partition = data_partitions[fold_num]
     for counter, hyperparam_config in enumerate(hyperparam_options):
         mconfig, options = generate_models_config(hyperparam_config, 
                                                   similarity_type,
                                                   model_name,
                                                   input_dim,
-                                                  fold_num, fdtype, 
+                                                  fold_num, 
+                                                  fdtype, 
                                                   loss_func=loss_func)
         options['num_epochs'] = num_epochs # override number of ephocs here
-        print("Running experiment {} config #{}".format(experiment_desc, counter))
-        path = os.path.join(root_dir, 
-                            'run_{}'.format(run_num),
-                            'config_{}'.format(counter))
+        print("Running  {} config #{}".format(similarity_type, counter))
+        path = os.path.join(root_dir, 'fold_{}'.format(fold_num), 'config_{}'.format(counter))
         wrk_dir = create_directory(path)
 
         if options.get('loss_func') == 'bceloss':
@@ -447,8 +450,8 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
             modelscore = perfmetric_report(pred_class, ref_class, prob_scores, epoch, flog_out[dsettype])
             prob_scores_arr = np.concatenate(prob_scores, axis=0)
 
-            perf = modelscore.aupr
-            best_rec_score = score_dict[dsettype].aupr
+            perf = modelscore.s_aupr
+            best_rec_score = score_dict[dsettype].s_aupr
             if(perf > best_rec_score):
                 score_dict[dsettype] = modelscore
                 if(dsettype == 'validation'):
@@ -541,14 +544,14 @@ def get_hyperparam_options(prob_interval_truemax, prob_estim, model_name, random
     return [hyperconfig_class(*hyperparam_space[indx]) for indx in indxs]
 
 
-def get_random_simtype_fold_per_hyperparam_exp(similarity_types, random_seed=42):
-    """Get for each similarity type the fold number to use for identifying optimal hyperparams
-    """
-    np.random.seed(random_seed)
-    simtype_fold = {}
-    for sim_type in similarity_types:
-        simtype_fold[sim_type] = np.random.randint(5)
-    return simtype_fold
+# def get_random_simtype_fold_per_hyperparam_exp(similarity_types, random_seed=42):
+#     """Get for each similarity type the fold number to use for identifying optimal hyperparams
+#     """
+#     np.random.seed(random_seed)
+#     simtype_fold = {}
+#     for sim_type in similarity_types:
+#         simtype_fold[sim_type] = np.random.randint(5)
+#     return simtype_fold
 
 
 def get_saved_config(config_dir):
@@ -561,43 +564,41 @@ def get_index_argmax(score_matrix, target_indx):
     argmax_indx = np.argmax(score_matrix, axis=0)[target_indx]
     return argmax_indx
 
-def get_best_config_from_hyperparamsearch(hyperparam_search_dir, num_runs=5, num_trials=60, num_metrics=5, metric_indx=4, random_seed=42):
+def get_best_config_from_hyperparamsearch(hyperparam_search_dir, num_folds=5, num_trials=60, num_metrics=6, metric_indx=5, random_seed=42):
     """Read best models config from all models tested in hyperparamsearch phase
     Args:
-        questions: list, of questions [4,5,9,10,11]
-        hyperparam_search_dir: string, path root directory where hyperparam models are stored
-        num_trials: int, number of tested models (default 60 based on 0.05 interval and 0.95 confidence interval)
-                    see :func: `compute_numtrials`
-        metric_indx:int, (default 4) using AUC as performance metric to evaluate among the tested models
+
     """
     # determine best config from hyperparam search
-#     run_num = get_random_run(num_runs, random_seed=random_seed)
-    fold_num = 0
-    run_dir = os.path.join(hyperparam_search_dir, 'fold_{}'.format(run_num))
+    fold_num = get_random_fold(num_folds, random_seed=random_seed)
+    fold_dir = os.path.join(hyperparam_search_dir, f'fold_{fold_num}')
 
     scores = np.ones((num_trials, num_metrics))*-1
     exist_flag = False
 
     for config_num in range(num_trials):
-        score_file = os.path.join(run_dir, 'config_{}'.format(config_num), 'score_validation.pkl')
+        score_file = os.path.join(fold_dir, 'config_{}'.format(config_num), 'score_validation.pkl')
         if(os.path.isfile(score_file)):
             try:
                 mscore = ReaderWriter.read_data(score_file)
                 print(mscore)
                 scores[config_num, 0] = mscore.best_epoch_indx
-                scores[config_num, 1] = mscore.binary_f1
-                scores[config_num, 2] = mscore.macro_f1
-                scores[config_num, 3] = mscore.aupr
-                scores[config_num, 4] = mscore.auc
+                scores[config_num, 1] = mscore.s_precision
+                scores[config_num, 2] = mscore.s_recall
+                scores[config_num, 3] = mscore.s_f1
+                scores[config_num, 4] = mscore.s_auc
+                scores[config_num, 5] = mscore.s_aupr
+
                 exist_flag = True
             except Exception as e:
                 print(f'exception occured at config_{config_num}')
                 continue
         else:
             print("WARNING: hyperparam search dir does not exist: {}".format(score_file))
+
     if(exist_flag):
         argmax_indx = get_index_argmax(scores, metric_indx)
-        mconfig, options = get_saved_config(os.path.join(run_dir, 'config_{}'.format(argmax_indx), 'config'))
+        mconfig, options = get_saved_config(os.path.join(fold_dir, 'config_{}'.format(argmax_indx), 'config'))
         return mconfig, options, argmax_indx, scores
     
     return None
