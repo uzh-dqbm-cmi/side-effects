@@ -105,64 +105,44 @@ def create_setvector_features(X, num_sim_types):
     # print('h.shape', h.shape)
     return h
 
-def get_stratified_partitions(ddi_datatensor, num_folds=5, random_state=42):
+def get_stratified_partitions(ddi_datatensor, num_folds=5, valid_set_portion=0.1, random_state=42):
     """Generate 5-fold stratified sample of drug-pair ids based on the interaction label
 
     Args:
         ddi_datatensor: instance of :class:`DDIDataTensor`
     """
     skf_trte = StratifiedKFold(n_splits=num_folds, random_state=random_state, shuffle=True)  # split train and test
+    
+    skf_trv = StratifiedShuffleSplit(n_splits=2, 
+                                     test_size=valid_set_portion, 
+                                     random_state=random_state)  # split train and test
     data_partitions = {}
     X = ddi_datatensor.X_feat
     y = ddi_datatensor.y
     fold_num = 0
     for train_index, test_index in skf_trte.split(X,y):
-    
-        data_partitions[fold_num] = {'train': train_index,
-                                     'test': test_index}
+        
+        x_tr = np.zeros(len(train_index))
+        y_tr = y[train_index]
+
+        for tr_index, val_index in skf_trv.split(x_tr, y_tr):
+            tr_ids = train_index[tr_index]
+            val_ids = train_index[val_index]
+            data_partitions[fold_num] = {'train': tr_ids,
+                                         'validation': val_ids,
+                                         'test': test_index}
+            
         print("fold_num:", fold_num)
         print('train data')
-        report_label_distrib(y[train_index])
+        report_label_distrib(y[tr_ids])
+        print('validation data')
+        report_label_distrib(y[val_ids])
         print('test data')
         report_label_distrib(y[test_index])
         print()
         fold_num += 1
         print("-"*25)
     return(data_partitions)
-
-def get_validation_partitions(ddi_datatensor, num_folds=2, valid_set_portion=0.1, random_state=42):
-    """Generate stratified train/validation split of drug-pair ids based on the interaction label
-
-    Args:
-        ddi_datatensor: instance of :class:`DDIDataTensor`
-    """
-    skf_trte = StratifiedShuffleSplit(n_splits=num_folds, 
-                                      test_size=valid_set_portion, 
-                                      random_state=random_state)  # split train and test
-    data_partitions = {}
-    X = ddi_datatensor.X_feat
-    y = ddi_datatensor.y
-    fold_num = 0
-    for train_index, test_index in skf_trte.split(X,y):
-    
-        data_partitions[fold_num] = {'train': train_index,
-                                     'validation': test_index}
-        print("fold_num:", fold_num)
-        print('train data')
-        report_label_distrib(y[train_index])
-        print('validation data')
-        report_label_distrib(y[test_index])
-        print()
-        fold_num += 1
-        print("-"*25)
-    return(data_partitions)
-
-def report_label_distrib(labels):
-    classes, counts = np.unique(labels, return_counts=True)
-    norm_counts = counts/counts.sum()
-    for i, label in enumerate(classes):
-        print("class:", label, "norm count:", norm_counts[i])
-
 
 def validate_partitions(data_partitions, drugpairs_ids, valid_set_portion=0.1, test_set_portion=0.2):
     if(not isinstance(drugpairs_ids, set)):
@@ -172,14 +152,25 @@ def validate_partitions(data_partitions, drugpairs_ids, valid_set_portion=0.1, t
     for fold_num in data_partitions:
         print('fold_num', fold_num)
         tr_ids = data_partitions[fold_num]['train']
+        val_ids = data_partitions[fold_num]['validation']
         te_ids = data_partitions[fold_num]['test']
 
+        tr_val = set(tr_ids).intersection(val_ids)
         tr_te = set(tr_ids).intersection(te_ids)
+        te_val = set(te_ids).intersection(val_ids)
+        
+        tr_size = len(tr_ids) + len(val_ids)
         # assert there is no overlap among train and test partition within a fold
+        print('expected validation set size:', valid_set_portion*tr_size, '; actual test set size:', len(val_ids))
         assert len(tr_te) == 0
         print('expected test set size:', test_set_portion*num_pairs, '; actual test set size:', len(te_ids))
         print()
+        assert np.abs(valid_set_portion*tr_size - len(val_ids)) <= 2
         assert np.abs(test_set_portion*num_pairs - len(te_ids)) <= 2
+        for s in (tr_val, tr_te, te_val):
+            assert len(s) == 0
+        s_union = set(tr_ids).union(val_ids).union(te_ids)
+        assert len(s_union) == num_pairs
         test_set_accum = test_set_accum.union(te_ids)
     # verify that assembling test sets from each of the five folds would be equivalent to all drugpair ids
     assert len(test_set_accum) == num_pairs
@@ -187,6 +178,88 @@ def validate_partitions(data_partitions, drugpairs_ids, valid_set_portion=0.1, t
     print("passed intersection and overlap test (i.e. train, validation and test sets are not",
           "intersecting in each fold and the concatenation of test sets from each fold is",
           "equivalent to the whole dataset)")
+          
+# def get_stratified_partitions(ddi_datatensor, num_folds=5, random_state=42):
+#     """Generate 5-fold stratified sample of drug-pair ids based on the interaction label
+
+#     Args:
+#         ddi_datatensor: instance of :class:`DDIDataTensor`
+#     """
+#     skf_trte = StratifiedKFold(n_splits=num_folds, random_state=random_state, shuffle=True)  # split train and test
+#     data_partitions = {}
+#     X = ddi_datatensor.X_feat
+#     y = ddi_datatensor.y
+#     fold_num = 0
+#     for train_index, test_index in skf_trte.split(X,y):
+    
+#         data_partitions[fold_num] = {'train': train_index,
+#                                      'test': test_index}
+#         print("fold_num:", fold_num)
+#         print('train data')
+#         report_label_distrib(y[train_index])
+#         print('test data')
+#         report_label_distrib(y[test_index])
+#         print()
+#         fold_num += 1
+#         print("-"*25)
+#     return(data_partitions)
+
+# def validate_partitions(data_partitions, drugpairs_ids, valid_set_portion=0.1, test_set_portion=0.2):
+#     if(not isinstance(drugpairs_ids, set)):
+#         drugpairs_ids = set(drugpairs_ids)
+#     num_pairs = len(drugpairs_ids)
+#     test_set_accum = set([])
+#     for fold_num in data_partitions:
+#         print('fold_num', fold_num)
+#         tr_ids = data_partitions[fold_num]['train']
+#         te_ids = data_partitions[fold_num]['test']
+
+#         tr_te = set(tr_ids).intersection(te_ids)
+#         # assert there is no overlap among train and test partition within a fold
+#         assert len(tr_te) == 0
+#         print('expected test set size:', test_set_portion*num_pairs, '; actual test set size:', len(te_ids))
+#         print()
+#         assert np.abs(test_set_portion*num_pairs - len(te_ids)) <= 2
+#         test_set_accum = test_set_accum.union(te_ids)
+#     # verify that assembling test sets from each of the five folds would be equivalent to all drugpair ids
+#     assert len(test_set_accum) == num_pairs
+#     assert test_set_accum == drugpairs_ids
+#     print("passed intersection and overlap test (i.e. train, validation and test sets are not",
+#           "intersecting in each fold and the concatenation of test sets from each fold is",
+#           "equivalent to the whole dataset)")
+
+# def get_validation_partitions(ddi_datatensor, num_folds=2, valid_set_portion=0.1, random_state=42):
+#     """Generate stratified train/validation split of drug-pair ids based on the interaction label
+
+#     Args:
+#         ddi_datatensor: instance of :class:`DDIDataTensor`
+#     """
+#     skf_trte = StratifiedShuffleSplit(n_splits=num_folds, 
+#                                       test_size=valid_set_portion, 
+#                                       random_state=random_state)  # split train and test
+#     data_partitions = {}
+#     X = ddi_datatensor.X_feat
+#     y = ddi_datatensor.y
+#     fold_num = 0
+#     for train_index, test_index in skf_trte.split(X,y):
+    
+#         data_partitions[fold_num] = {'train': train_index,
+#                                      'validation': test_index}
+#         print("fold_num:", fold_num)
+#         print('train data')
+#         report_label_distrib(y[train_index])
+#         print('validation data')
+#         report_label_distrib(y[test_index])
+#         print()
+#         fold_num += 1
+#         print("-"*25)
+#     return(data_partitions)
+
+def report_label_distrib(labels):
+    classes, counts = np.unique(labels, return_counts=True)
+    norm_counts = counts/counts.sum()
+    for i, label in enumerate(classes):
+        print("class:", label, "norm count:", norm_counts[i])
 
 
 def generate_partition_datatensor(ddi_datatensor, data_partitions):
