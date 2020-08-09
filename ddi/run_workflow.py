@@ -1,10 +1,12 @@
 
 import os
 import itertools
-from .utilities import get_device, create_directory, ReaderWriter, perfmetric_report, plot_loss
+from .utilities import get_device, create_directory, ReaderWriter, perfmetric_report, plot_loss, add_weight_decay_except_attn
 from .model import NDD_Code
-from .model_attn import DDI_Transformer
+# from .model_attn import DDI_Transformer
+from .model_attn_siamese import DDI_SiameseTrf, DDI_Transformer, FeatureEmbAttention
 from .dataset import construct_load_dataloaders
+from .losses import ContrastiveLoss
 import numpy as np
 import pandas as pd
 import torch
@@ -32,33 +34,39 @@ class NDDHyperparamConfig:
         return desc
 
 class DDITrfHyperparamConfig:
-    def __init__(self, num_attn_heads, num_transformer_units, 
-                p_dropout, nonlin_func, mlp_embed_factor, 
+    def __init__(self, input_embed_dim, num_attn_heads, num_transformer_units, 
+                p_dropout, nonlin_func, mlp_embed_factor, pooling_mode, dist_opt,
                 l2_reg, batch_size, num_epochs):
+        self.input_embed_dim = input_embed_dim
         self.num_attn_heads = num_attn_heads
         self.num_transformer_units = num_transformer_units
         self.p_dropout = p_dropout
         self.nonlin_func = nonlin_func
         self.mlp_embed_factor = mlp_embed_factor
+        self.pooling_mode = pooling_mode
+        self.dist_opt = dist_opt
         self.l2_reg = l2_reg
         self.batch_size = batch_size
         self.num_epochs = num_epochs
 
 
     def __repr__(self):
-        desc = " num_attn_heads:{}\n num_transformer_units:{}\n p_dropout:{} \n " \
-               "nonlin_func:{} \n mlp_embed_factor:{} \n " \
-               "l2_reg:{} \n batch_size:{} \n num_epochs: {}".format(self.num_attn_heads,
+        desc = " input_embed_dim:{}\n num_attn_heads:{}\n num_transformer_units:{}\n p_dropout:{} \n " \
+               "nonlin_func:{} \n mlp_embed_factor:{} \n pooling_mode:{} \n" \
+               "dist_opt:{} \n l2_reg:{} \n batch_size:{} \n num_epochs: {}".format(self.input_embed_dim,
+                                                                     self.num_attn_heads,
                                                                      self.num_transformer_units,
                                                                      self.p_dropout, 
                                                                      self.nonlin_func,
                                                                      self.mlp_embed_factor,
+                                                                     self.pooling_mode,
+                                                                     self.dist_opt,
                                                                      self.l2_reg, 
                                                                      self.batch_size,
                                                                      self.num_epochs)
         return desc
 
-def generate_models_config(hyperparam_config, similarity_type, model_name, input_dim, fold_num, fdtype, loss_func='nllloss'):
+def generate_models_config(hyperparam_config, similarity_type, model_name, input_dim, fold_num, fdtype, loss_func='nllloss', margin=0.5):
 
     dataloader_config = {'batch_size': hyperparam_config.batch_size,
                          'num_workers': 0}
@@ -75,20 +83,21 @@ def generate_models_config(hyperparam_config, similarity_type, model_name, input
                'weight_decay': hyperparam_config.l2_reg,
                'fdtype':fdtype,
                'to_gpu':True,
-               'loss_func':loss_func}
+               'loss_func':loss_func,
+               'contrastiveloss_margin':margin}
 
     return config, options
 
-def build_custom_config_map(similarity_type, model_name, loss_func='nllloss'):
+def build_custom_config_map(similarity_type, model_name, loss_func='nllloss', margin=0.5):
     if(model_name == 'NDD'):
         hyperparam_config = NDDHyperparamConfig(400,300,0.5,0,200,20)
         input_dim = 1096
     elif(model_name == 'Transformer'):
-        hyperparam_config = DDITrfHyperparamConfig(8, 12, 0.3, nn.ReLU(), 2, 0, 200, 20)
+        hyperparam_config = DDITrfHyperparamConfig(64, 8, 12, 0.3, nn.ReLU(), 2, 'attn', 'euclidean', 0, 200, 20)
         input_dim = 548
     fold_num = -1 
     fdtype = torch.float32
-    mconfig, options = generate_models_config(hyperparam_config, similarity_type, model_name, input_dim, fold_num, fdtype, loss_func=loss_func)
+    mconfig, options = generate_models_config(hyperparam_config, similarity_type, model_name, input_dim, fold_num, fdtype, loss_func=loss_func, margin=margin)
     return mconfig, options
 
 def dump_dict_content(dsettype_content_map, dsettypes, desc, wrk_dir):
@@ -101,7 +110,7 @@ def get_random_fold(num_folds, random_seed=42):
     return fold_num
 
 def hyperparam_model_search(data_partitions, similarity_type, model_name,
-                            input_dim, root_dir, fold_gpu_map, loss_func='nllloss', 
+                            input_dim, root_dir, fold_gpu_map, loss_func='nllloss', margin=0.5,
                             fdtype=torch.float32, num_epochs=25,
                             prob_interval_truemax=0.05, prob_estim=0.95, random_seed=42,
                             per_base=False):
@@ -117,7 +126,8 @@ def hyperparam_model_search(data_partitions, similarity_type, model_name,
                                                   input_dim,
                                                   fold_num, 
                                                   fdtype, 
-                                                  loss_func=loss_func)
+                                                  loss_func=loss_func,
+                                                  margin=margin)
         options['num_epochs'] = num_epochs # override number of ephocs here
         print("Running  {} config #{}".format(similarity_type, counter))
         path = os.path.join(root_dir, 'fold_{}'.format(fold_num), 'config_{}'.format(counter))
@@ -307,7 +317,7 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
     cld = construct_load_dataloaders(data_partition, dsettypes, dataloader_config, wrk_dir)
     # dictionaries by dsettypes
     data_loaders, epoch_loss_avgbatch, score_dict, class_weights, flog_out = cld
-    # print(flog_out)
+    print(flog_out)
     # print(class_weights)
     device = get_device(to_gpu, gpu_index)  # gpu device
     fdtype = options['fdtype']
@@ -315,10 +325,14 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
     if('train' in class_weights):
         class_weights = class_weights['train'].type(fdtype).to(device)  # update class weights to fdtype tensor
     else:
-        class_weights = torch.tensor([1]*num_classes).type(fdtype).to(device)  # weighting all casess equally
+        class_weights = torch.tensor([1]*2).type(fdtype).to(device)  # weighting all casess equally
 
     print("class weights", class_weights)
     loss_func = torch.nn.NLLLoss(weight=class_weights, reduction='mean')  # negative log likelihood loss
+    loss_contrastive = ContrastiveLoss(options.get('contrastiveloss_margin', 0.5), reduction='mean')
+    loss_contrastive.type(fdtype).to(device)
+    # loss_attn = FeatureEmbAttention(1)
+    # loss_attn.type(fdtype).to(device)
 
     num_epochs = options.get('num_epochs', 50)
     fold_num = options.get('fold_num')
@@ -329,18 +343,20 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
 
 
     if(model_name == 'Transformer'):
-        ddi_model = DDI_Transformer(input_size=options['input_dim'], 
+        ddi_model = DDI_Transformer(input_size=options['input_dim'],
+                                    input_embed_dim=model_config.input_embed_dim, 
                                     num_attn_heads=model_config.num_attn_heads, 
                                     mlp_embed_factor=model_config.mlp_embed_factor,
                                     nonlin_func=model_config.nonlin_func,
                                     pdropout=model_config.p_dropout, 
                                     num_transformer_units=model_config.num_transformer_units,
-                                    pooling_mode=model_config.pooling_mode,
-                                    num_classes=2)
+                                    pooling_mode=model_config.pooling_mode)
+        ddi_siamese = DDI_SiameseTrf(model_config.input_embed_dim,model_config.dist_opt, num_classes=2)
+        
     
     # define optimizer and group parameters
-    models_param = list(ddi_model.parameters())
-    models = [(ddi_model, model_name)]
+    models_param = list(ddi_model.parameters()) + list(ddi_siamese.parameters())
+    models = [(ddi_model, model_name), (ddi_siamese, f'{model_name}_Siamese')]
 
     if(state_dict_dir):  # load state dictionary of saved models
         for m, m_name in models:
@@ -353,6 +369,8 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
     if('train' in data_loaders):
         weight_decay = options.get('weight_decay', 1e-4)
         print('weight_decay', weight_decay)
+        # split model params into attn parameters and other params
+        # models_param = add_weight_decay_except_attn([ddi_model, ddi_siamese], weight_decay)
         # see paper Cyclical Learning rates for Training Neural Networks for parameters' choice
         # `https://arxive.org/pdf/1506.01186.pdf`
         # pytorch version >1.1, scheduler should be called after optimizer
@@ -361,7 +379,8 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
         c_step_size = int(np.ceil(5*num_iter))  # this should be 2-10 times num_iter
         base_lr = 3e-4
         max_lr = 5*base_lr  # 3-5 times base_lr
-        optimizer = torch.optim.Adam(models_param, weight_decay=weight_decay, lr=base_lr)
+        # optimizer = torch.optim.Adam(models_param, weight_decay=weight_decay, lr=base_lr)
+        optimizer = torch.optim.Adam(models_param, lr=base_lr)
         cyc_scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr, max_lr, step_size_up=c_step_size,
                                                         mode='triangular', cycle_momentum=False)
 
@@ -376,7 +395,8 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
     ReaderWriter.dump_data(config, os.path.join(config_dir, 'mconfig.pkl'))
     ReaderWriter.dump_data(options, os.path.join(config_dir, 'exp_options.pkl'))
     # store attention weights for validation and test set
-    seqid_fattnw_map = {dsettype: {} for dsettype in data_loaders if dsettype in {'test'}}
+    seqid_fattnw_map = {dsettype: {'X_a':{}, 'X_b':{}} for dsettype in data_loaders if dsettype in {'test'}}
+    pair_names = ('a', 'b')
 
     for epoch in range(num_epochs):
         # print("-"*35)
@@ -405,33 +425,59 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
                 if(dsettype == 'train'):
                     optimizer.zero_grad()
 
-                X_batch, y_batch, ids = samples_batch
+                X_a, X_b, y_batch, ids = samples_batch
+                # print(y_batch.shape)
 
-                X_batch = X_batch.to(device)
-                y_batch = y_batch.reshape(-1, 1) # TODO: reshape when preprocessing feature
+                X_a = X_a.to(device)
+                X_b = X_b.to(device)
+                y_batch = y_batch.reshape(-1) # TODO: reshape when preprocessing feature
+
                 y_batch = y_batch.type(torch.int64).to(device)
                 # print('ids', ids.shape, ids.dtype)
 
                 with torch.set_grad_enabled(dsettype == 'train'):
                     # print("number of examples in batch:", docs_batch.size(0))
-                    num_samples_perbatch = X_batch.size(0)
+                    num_samples_perbatch = X_a.size(0)
                     # print("number_samples_per_batch", num_samples_perbatch)
-                    logsoftmax_scores, fattn_w_scores = ddi_model(X_batch)
+                    z_a, fattn_w_scores_a = ddi_model(X_a)
+                    z_b, fattn_w_scores_b = ddi_model(X_b)
 
-                    if(dsettype in seqid_fattnw_map):
-                        seqid_fattnw_map[dsettype].update({sid:fattn_w_scores[c].detach().cpu() for c, sid in enumerate(ids)})
-                   
+                    if(dsettype in seqid_fattnw_map and model_config.pooling_mode == 'attn'):
+                        for l, attn_scores in enumerate((fattn_w_scores_a, fattn_w_scores_b)):
+                            suffix = pair_names[l]
+                            seqid_fattnw_map[dsettype][f'X_{suffix}'].update({sid.item():attn_scores[c].detach().cpu() for c, sid in enumerate(ids)})
+
+                    
+                    logsoftmax_scores, dist = ddi_siamese(z_a, z_b)
+
                     __, y_pred_clss = torch.max(logsoftmax_scores, -1)
 
                     y_pred_prob  = torch.exp(logsoftmax_scores.detach().cpu()).numpy()
                     
-
+                    # print(y_pred_prob.shape)
                     pred_class.extend(y_pred_clss.view(-1).tolist())
                     ref_class.extend(y_batch.view(-1).tolist())
-                    prob_scores.extend(y_pred_prob.tolist())
+                    prob_scores.append(y_pred_prob)
+                    # print(prob_scores)
                     ddi_ids.extend(ids.tolist())
 
-                    loss = loss_func(logsoftmax_scores, y_batch)
+                    cl = loss_func(logsoftmax_scores, y_batch)
+                    # dl = loss_contrastive(dist.reshape(-1), y_batch)
+                    # print(cl)
+                    # print('cl', cl.shape)
+                    # print('dl', dl.shape)
+                    # cl.unsqueeze_(-1).unsqueeze_(-1)
+                    # dl.unsqueeze_(-1).unsqueeze_(-1)
+                    # # print('cl', cl.shape)
+                    # loss, __ = loss_attn(torch.cat([cl,dl], axis=1))
+                    # loss = loss.mean()
+                    # # print(loss)
+                    
+                    # loss = 0.8*cl + 0.2*dl
+                    loss = cl
+                    # loss = 0.8*loss_func(logsoftmax_scores, y_batch) + 0.2*loss_contrastive(dist.reshape(-1), y_batch)
+                    # loss = loss_func(logsoftmax_scores, y_batch)
+
                     if(dsettype == 'train'):
                         # print("computing loss")
                         # backward step (i.e. compute gradients)
@@ -447,8 +493,9 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
             # end of epoch
             # print("+"*35)
             epoch_loss_avgbatch[dsettype].append(epoch_loss/len(data_loader))
-            modelscore = perfmetric_report(pred_class, ref_class, prob_scores, epoch, flog_out[dsettype])
             prob_scores_arr = np.concatenate(prob_scores, axis=0)
+            # print(prob_scores_arr.shape)
+            modelscore = perfmetric_report(pred_class, ref_class, prob_scores_arr[:,1], epoch, flog_out[dsettype])
 
             perf = modelscore.s_aupr
             best_rec_score = score_dict[dsettype].s_aupr
@@ -504,12 +551,14 @@ def generate_hyperparam_space(model_name):
         p_dropout = [0.1, 0.3, 0.5]
         nonlin_func = [nn.ReLU()]
         mlp_embed_factor = [2]
+        pooling_mode = ['attn']
+        dist_opt = ['euclidean']
         l2_reg = [1e-4, 1e-3, 1e-2]
         batch_size = [4000]
         num_epochs = [25]
         opt_lst = [embed_dim, num_attn_heads, 
                    num_transformer_units, p_dropout,
-                   nonlin_func, mlp_embed_factor,
+                   nonlin_func, mlp_embed_factor, pooling_mode, dist_opt,
                    l2_reg, batch_size, num_epochs]
 
     hyperparam_space = list(itertools.product(*opt_lst))
@@ -604,7 +653,7 @@ def get_best_config_from_hyperparamsearch(hyperparam_search_dir, num_folds=5, nu
     return None
 
 def train_val_run(datatensor_partitions, config_map, train_val_dir, fold_gpu_map, num_epochs=20):
-    dsettypes = ['train']
+    dsettypes = ['train', 'validation']
     mconfig, options = config_map
     options['num_epochs'] = num_epochs  # override number of epochs using user specified value
     similarity_type = options['similarity_type']
@@ -613,9 +662,10 @@ def train_val_run(datatensor_partitions, config_map, train_val_dir, fold_gpu_map
         options['fold_num'] = fold_num
         data_partition = datatensor_partitions[fold_num]
         # tr_val_dir = create_directory(train_val_dir)
-        path = os.path.join(train_val_dir, 'train_val_{}'.format(similarity_type), 'fold_{}'.format(fold_num))
+        path = os.path.join(train_val_dir, 'train_val', 'fold_{}'.format(fold_num))
+        # wrk_dir = create_directory('fold_{}'.format(fold_num), create_directory('train_val', train_val_dir))
         wrk_dir = create_directory(path)
-        # print(wrk_dir)
+        print(wrk_dir)
         # wrk_dir = create_directory('fold_{}'.format(fold_num),create_directory('train_val_{}'.format(similarity_type), train_val_dir))
         if options.get('loss_func') == 'bceloss':
             run_ddi(data_partition, dsettypes, mconfig, options, wrk_dir,
@@ -637,11 +687,11 @@ def test_run(datatensor_partitions, config_map, train_val_dir, test_dir, fold_gp
         # update options fold num to the current fold
         options['fold_num'] = fold_num
         data_partition = datatensor_partitions[fold_num]
-        train_dir = create_directory(os.path.join(train_val_dir, 'train_val_{}'.format(similarity_type), 'fold_{}'.format(fold_num)))
+        train_dir = create_directory(os.path.join(train_val_dir, 'train_val', 'fold_{}'.format(fold_num)))
         if os.path.exists(train_dir):
             # load state_dict pth
             state_dict_pth = os.path.join(train_dir, 'model_statedict')
-            path = os.path.join(test_dir, 'test_{}'.format(similarity_type), 'fold_{}'.format(fold_num))
+            path = os.path.join(test_dir, 'test', 'fold_{}'.format(fold_num))
             test_wrk_dir = create_directory(path)
             if options.get('loss_func') == 'bceloss':
                 run_ddi(data_partition, dsettypes, mconfig, options, test_wrk_dir,
@@ -653,4 +703,5 @@ def test_run(datatensor_partitions, config_map, train_val_dir, test_dir, fold_gp
                         gpu_index=fold_gpu_map[fold_num])   
         else:
             print('WARNING: train dir not found: {}'.format(path))
+
 

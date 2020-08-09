@@ -147,12 +147,21 @@ class FeatureEmbAttention(nn.Module):
         # returns (bsize, feat_dim), (bsize, num similarity type vectors)
         return z, attn_weights_norm
 
+# TODO: create a base nn.Module class that contains this implementation and subclass all other models from
+def _init_model_params(named_parameters):
+    for p_name, p in named_parameters:
+        param_dim = p.dim()
+        if param_dim > 1: # weight matrices
+            nn.init.xavier_uniform_(p)
+        elif param_dim == 1: # bias parameters
+            if p_name.endswith('bias'):
+                nn.init.uniform_(p, a=-1.0, b=1.0)
 
 class DDI_Transformer(nn.Module):
 
     def __init__(self, input_size=586, input_embed_dim=64, num_attn_heads=8, mlp_embed_factor=2, 
                 nonlin_func=nn.ReLU(), pdropout=0.3, num_transformer_units=12,
-                pooling_mode = 'attn', num_classes=2):
+                pooling_mode = 'attn'):
         
         super().__init__()
         
@@ -163,26 +172,17 @@ class DDI_Transformer(nn.Module):
         trfunit_layers = [TransformerUnit(embed_size, num_attn_heads, mlp_embed_factor, nonlin_func, pdropout) for i in range(num_transformer_units)]
         self.trfunit_pipeline = nn.Sequential(*trfunit_layers)
 
-        self.Wy = nn.Linear(embed_size, num_classes)
         self.pooling_mode = pooling_mode
         if pooling_mode == 'attn':
             self.pooling = FeatureEmbAttention(embed_size)
         elif pooling_mode == 'mean':
             self.pooling = torch.mean
 
-        # perform log softmax on the feature dimension
-        self.log_softmax = nn.LogSoftmax(dim=-1)
         self._init_params_()
         
         
     def _init_params_(self):
-        for p_name, p in self.named_parameters():
-            param_dim = p.dim()
-            if param_dim > 1: # weight matrices
-                nn.init.xavier_uniform_(p)
-            elif param_dim == 1: # bias parameters
-                if p_name.endswith('bias'):
-                    nn.init.uniform_(p, a=-1.0, b=1.0)
+        _init_model_params(self.named_parameters())
     
     def forward(self, X):
         """
@@ -206,7 +206,53 @@ class DDI_Transformer(nn.Module):
         elif self.pooling_mode == 'mean':
             z = self.pooling(z, dim=1)
             fattn_w_norm = None
-
-        y = self.Wy(z) 
         
-        return self.log_softmax(y), fattn_w_norm
+        return z, fattn_w_norm
+
+class DDI_SiameseTrf(nn.Module):
+
+    def __init__(self, input_dim, dist, num_classes=2):
+        
+        super().__init__()
+        
+        if dist == 'euclidean':
+            self.dist = nn.PairwiseDistance(p=2, keepdim=True)
+            self.alpha = 0
+        elif dist == 'manhattan':
+            self.dist = nn.PairwiseDistance(p=1, keepdim=True)
+            self.alpha = 0
+        elif dist == 'cosine':
+            self.dist = nn.CosineSimilarity(dim=1)
+            self.alpha = 1
+
+        self.pooling = FeatureEmbAttention(input_dim)
+        self.Wy = nn.Linear(input_dim+1, num_classes)
+        # perform log softmax on the feature dimension
+        self.log_softmax = nn.LogSoftmax(dim=-1)
+
+        self._init_params_()
+        
+        
+    def _init_params_(self):
+        _init_model_params(self.named_parameters())
+    
+    def forward(self, Z_a, Z_b):
+        """
+        Args:
+            Z_a: tensor, (batch, embedding dim)
+            Z_b: tensor, (batch, embedding dim)
+        """
+
+        dist = self.dist(Z_a, Z_b).reshape(-1,1)
+        # update dist to distance measure if cosine is chosen
+        dist = self.alpha * (1-dist) + (1-self.alpha) * dist
+        # concat both vectors to pass to feature attention for unified representation
+        # Z_a: (batch, 1, embedding dim)
+        Z_a = Z_a.unsqueeze(1)
+        Z_b = Z_b.unsqueeze(1)
+        # Z_union: (batch, embedding dim)
+        Z_union, __ = self.pooling(torch.cat([Z_a, Z_b], axis=1))
+        # print("Z_union:", Z_union.shape)
+        out = torch.cat([Z_union, dist], axis=-1) 
+        y = self.Wy(out)
+        return self.log_softmax(y), dist

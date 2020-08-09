@@ -1,23 +1,42 @@
 import os
 import numpy as np
 import torch
-from .utilities import ModelScore, ReaderWriter
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit
 from sklearn.utils.class_weight import compute_class_weight
+from scipy.spatial.distance import pdist, squareform
+from scipy.linalg import norm as scpnorm
+import pandas as pd
+from .utilities import ModelScore, ReaderWriter
 
 
 class DDIDataTensor(Dataset):
 
-    def __init__(self, X_feat, y):
-        self.X_feat = X_feat  # tensor.float32, (drug pairs, features)
+    def __init__(self, X_a, X_b, y):
+        self.X_a = X_a # tensor.float32, (drug pairs, features)
+        self.X_b = X_b # tensor.float32, (drug pairs, features)
         # drug interactions
         self.y = y  # tensor.float32, (drug pairs,)
         self.num_samples = self.y.size(0)  # int, number of drug pairs
 
     def __getitem__(self, indx):
 
-        return(self.X_feat[indx], self.y[indx], indx)
+        return(self.X_a[indx], self.X_b[indx], self.y[indx], indx)
+
+    def __len__(self):
+        return(self.num_samples)
+
+class GIPDataTensor(Dataset):
+
+    def __init__(self, X_a, X_b):
+        self.X_a = X_a # tensor.float32, (drug pairs, gip features)
+        self.X_b = X_b # tensor.float32, (drug pairs, gip features)
+        # drug interactions
+        self.num_samples = self.X_a.size(0)  # int, number of drug pairs
+
+    def __getitem__(self, indx):
+
+        return(self.X_a[indx], self.X_b[indx], indx)
 
     def __len__(self):
         return(self.num_samples)
@@ -25,8 +44,9 @@ class DDIDataTensor(Dataset):
 
 class PartitionDataTensor(Dataset):
 
-    def __init__(self, ddi_datatensor, partition_ids, dsettype, fold_num):
+    def __init__(self, ddi_datatensor, gip_datatensor, partition_ids, dsettype, fold_num):
         self.ddi_datatensor = ddi_datatensor  # instance of :class:`DDIDataTensor`
+        self.gip_datatensor = gip_datatensor # instance of :class:`GIPDataTensor`
         self.partition_ids = partition_ids  # list of indices for drug pairs
         self.dsettype = dsettype  # string, dataset type (i.e. train, validation, test)
         self.fold_num = fold_num  # int, fold number
@@ -34,8 +54,14 @@ class PartitionDataTensor(Dataset):
 
     def __getitem__(self, indx):
         target_id = self.partition_ids[indx]
-        return self.ddi_datatensor[target_id]
-
+        X_a, X_b, y, ddi_indx = self.ddi_datatensor[target_id]
+        X_a_gip, X_b_gip, gip_indx = self.gip_datatensor[target_id]
+        assert ddi_indx == gip_indx
+        # combine gip with other matrices
+        X_a_comb = torch.cat([X_a, X_a_gip], axis=0)
+        X_b_comb = torch.cat([X_b, X_b_gip], axis=0)
+        return X_a_comb, X_b_comb, y, ddi_indx
+        
     def __len__(self):
         return(self.num_samples)
 
@@ -82,15 +108,79 @@ def construct_load_dataloaders(dataset_fold, dsettypes, config, wrk_dir):
 
     return (data_loaders, epoch_loss_avgbatch, score_dict, class_weights, flog_out)
 
-def preprocess_features(feat_fpath):
-    X_fea = np.loadtxt(feat_fpath,dtype=float,delimiter=",")
-    r, c = np.triu_indices(len(X_fea),1) # take indices off the diagnoal by 1
-    return np.concatenate((X_fea[r], X_fea[c]), axis=1)
+def preprocess_features(feat_fpath, dsetname):
+    if dsetname in {'DS1', 'DS3'}:
+        X_fea = np.loadtxt(feat_fpath,dtype=float,delimiter=",")
+    elif dsetname == 'DS2':
+        X_fea = pd.read_csv(feat_fpath).values[:,1:]
+    X_fea = X_fea.astype(np.float32)
+    return get_features_from_simmatrix(X_fea)
 
-def preprocess_labels(interaction_fpath):
-    interaction_matrix = np.loadtxt(interaction_fpath,dtype=float,delimiter=",")
-    r, c = np.triu_indices(len(interaction_matrix),1) # take indices off the diagnoal by 1
-    return interaction_matrix[r,c]
+def get_features_from_simmatrix(sim_mat):
+    """
+    Args:
+        sim_mat: np.array, mxm (drug pair similarity matrix)
+    """
+    r, c = np.triu_indices(len(sim_mat),1) # take indices off the diagnoal by 1
+    return np.concatenate((sim_mat[r], sim_mat[c]), axis=1)
+
+def preprocess_labels(interaction_fpath, dsetname):
+    interaction_mat = get_interaction_mat(interaction_fpath, dsetname)
+    return get_y_from_interactionmat(interaction_mat)
+
+def compute_gip_profile(adj, bw=1.):
+    """approach based on Olayan et al. https://doi.org/10.1093/bioinformatics/btx731 """
+    
+    ga = np.dot(adj,np.transpose(adj))
+    ga = bw*ga/np.mean(np.diag(ga))
+    di = np.diag(ga)
+    x =  np.tile(di,(1,di.shape[0])).reshape(di.shape[0],di.shape[0])
+    d =x+np.transpose(x)-2*ga
+    return np.exp(-d)
+
+def compute_kernel(mat, k_bandwidth, epsilon=1e-9):
+    """computes gaussian kernel from 2D matrix
+    
+       Approach based on van Laarhoven et al. doi:10.1093/bioinformatics/btr500
+    
+    """
+    r, c = mat.shape # 2D matrix
+    # computes pairwise l2 distance
+    dist_kernel = squareform(pdist(mat, metric='euclidean')**2)
+    gamma = k_bandwidth/(np.clip((scpnorm(mat, axis=1, keepdims=True)**2) * 1/c, a_min=epsilon, a_max=None))
+    return np.exp(-gamma*dist_kernel)
+
+def construct_sampleid_ddipairs(interaction_mat):
+    # take indices off the diagnoal by 1
+    r, c = np.triu_indices(len(interaction_mat),1)
+    sid_ddipairs = {sid:ddi_pair for sid, ddi_pair in enumerate(zip(r,c))}
+    return sid_ddipairs
+
+def get_num_drugs(interaction_fpath, dsetname):
+    if dsetname in {'DS1', 'DS3'}:
+        interaction_matrix = np.loadtxt(interaction_fpath,dtype=float,delimiter=",")
+    elif dsetname == 'DS2':
+        interaction_matrix = pd.read_csv(interaction_fpath).values[:,1:]
+    return interaction_matrix.shape[0]
+
+def get_interaction_mat(interaction_fpath, dsetname):
+    if dsetname in {'DS1', 'DS3'}:
+        interaction_matrix = np.loadtxt(interaction_fpath,dtype=float,delimiter=",")
+    elif dsetname == 'DS2':
+        interaction_matrix = pd.read_csv(interaction_fpath).values[:,1:]
+    return interaction_matrix.astype(np.int32)
+
+def get_similarity_matrix(feat_fpath, dsetname):
+    if dsetname in {'DS1', 'DS3'}:
+        X_fea = np.loadtxt(feat_fpath,dtype=float,delimiter=",")
+    elif dsetname == 'DS2':
+        X_fea = pd.read_csv(feat_fpath).values[:,1:]
+    X_fea = X_fea.astype(np.float32)
+    return X_fea
+
+def get_y_from_interactionmat(interaction_mat):
+    r, c = np.triu_indices(len(interaction_mat),1) # take indices off the diagnoal by 1
+    return interaction_mat[r,c]
 
 def create_setvector_features(X, num_sim_types):
     """reshape concatenated features from every similarity type matrix into set of vectors per ddi example"""
@@ -98,18 +188,18 @@ def create_setvector_features(X, num_sim_types):
     # print('e.shape', e.shape)
     f = np.transpose(e, axes=(0, 2, 1))
     # print('f.shape', f.shape)
-    splitter = 2*num_sim_types 
+    splitter = num_sim_types 
     g = np.concatenate(np.split(f, splitter, axis=1), axis=0)
     # print('g.shape', g.shape)
     h = np.transpose(g, axes=(2,0, 1))
     # print('h.shape', h.shape)
     return h
 
-def get_stratified_partitions(ddi_datatensor, num_folds=5, valid_set_portion=0.1, random_state=42):
+def get_stratified_partitions(y, num_folds=5, valid_set_portion=0.1, random_state=42):
     """Generate 5-fold stratified sample of drug-pair ids based on the interaction label
 
     Args:
-        ddi_datatensor: instance of :class:`DDIDataTensor`
+        y: ddi labels
     """
     skf_trte = StratifiedKFold(n_splits=num_folds, random_state=random_state, shuffle=True)  # split train and test
     
@@ -117,8 +207,7 @@ def get_stratified_partitions(ddi_datatensor, num_folds=5, valid_set_portion=0.1
                                      test_size=valid_set_portion, 
                                      random_state=random_state)  # split train and test
     data_partitions = {}
-    X = ddi_datatensor.X_feat
-    y = ddi_datatensor.y
+    X = np.zeros(len(y))
     fold_num = 0
     for train_index, test_index in skf_trte.split(X,y):
         
@@ -262,13 +351,15 @@ def report_label_distrib(labels):
         print("class:", label, "norm count:", norm_counts[i])
 
 
-def generate_partition_datatensor(ddi_datatensor, data_partitions):
+def generate_partition_datatensor(ddi_datatensor, gip_dtensor_perfold, data_partitions):
     datatensor_partitions = {}
+    print('hello')
     for fold_num in data_partitions:
         datatensor_partitions[fold_num] = {}
+        gip_datatensor = gip_dtensor_perfold[fold_num]
         for dsettype in data_partitions[fold_num]:
             target_ids = data_partitions[fold_num][dsettype]
-            datatensor_partition = PartitionDataTensor(ddi_datatensor, target_ids, dsettype, fold_num)
+            datatensor_partition = PartitionDataTensor(ddi_datatensor, gip_datatensor, target_ids, dsettype, fold_num)
             datatensor_partitions[fold_num][dsettype] = datatensor_partition
     compute_class_weights_per_fold_(datatensor_partitions)
 

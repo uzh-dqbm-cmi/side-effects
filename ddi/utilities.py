@@ -393,3 +393,22 @@ def to_categorical(y, num_classes=None, dtype='float32'):
     categorical = np.reshape(categorical, output_shape)
     return categorical
 
+def format_bytes(size):
+    # 2**10 = 1024
+    power = 2**10
+    n = 0
+    power_labels = {0 : '', 1: 'kilo', 2: 'mega', 3: 'giga', 4: 'tera'}
+    while size > power:
+        size /= power
+        n += 1
+    return round(size,2), power_labels[n]+'bytes'
+
+def add_weight_decay_except_attn(model_lst, l2_reg):
+    decay, no_decay = [], []
+    for m in model_lst:
+        for name, param in m.named_parameters():
+            if 'queryv' in name:
+                no_decay.append(param)
+            else: 
+                decay.append(param)
+    return [{'params': no_decay, 'weight_decay': 0.}, {'params': decay, 'weight_decay': l2_reg}]
