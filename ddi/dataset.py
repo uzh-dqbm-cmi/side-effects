@@ -56,7 +56,7 @@ class PartitionDataTensor(Dataset):
         target_id = self.partition_ids[indx]
         X_a, X_b, y, ddi_indx = self.ddi_datatensor[target_id]
         X_a_gip, X_b_gip, gip_indx = self.gip_datatensor[target_id]
-        assert ddi_indx == gip_indx
+        # assert ddi_indx == gip_indx
         # combine gip with other matrices
         X_a_comb = torch.cat([X_a, X_a_gip], axis=0)
         X_b_comb = torch.cat([X_b, X_b_gip], axis=0)
@@ -64,6 +64,34 @@ class PartitionDataTensor(Dataset):
         
     def __len__(self):
         return(self.num_samples)
+
+
+# no GIP involved
+# class PartitionDataTensor(Dataset):
+
+#     def __init__(self, ddi_datatensor, gip_datatensor, partition_ids, dsettype, fold_num):
+#         self.ddi_datatensor = ddi_datatensor  # instance of :class:`DDIDataTensor`
+#         self.gip_datatensor = gip_datatensor # instance of :class:`GIPDataTensor`
+#         self.partition_ids = partition_ids  # list of indices for drug pairs
+#         self.dsettype = dsettype  # string, dataset type (i.e. train, validation, test)
+#         self.fold_num = fold_num  # int, fold number
+#         self.num_samples = len(self.partition_ids)  # int, number of docs in the partition
+
+#     def __getitem__(self, indx):
+#         target_id = self.partition_ids[indx]
+#         X_a, X_b, y, ddi_indx = self.ddi_datatensor[target_id]
+#         # X_a_gip, X_b_gip, gip_indx = self.gip_datatensor[target_id]
+#         # assert ddi_indx == gip_indx
+#         # combine gip with other matrices
+#         # X_a_comb = torch.cat([X_a, X_a_gip], axis=0)
+#         # X_b_comb = torch.cat([X_b, X_b_gip], axis=0)
+#         X_a_comb = X_a
+#         X_b_comb = X_b
+#         return X_a_comb, X_b_comb, y, ddi_indx
+        
+#     def __len__(self):
+#         return(self.num_samples)
+
 
 
 def construct_load_dataloaders(dataset_fold, dsettypes, config, wrk_dir):
@@ -108,12 +136,14 @@ def construct_load_dataloaders(dataset_fold, dsettypes, config, wrk_dir):
 
     return (data_loaders, epoch_loss_avgbatch, score_dict, class_weights, flog_out)
 
-def preprocess_features(feat_fpath, dsetname):
+def preprocess_features(feat_fpath, dsetname, fill_diag = None):
     if dsetname in {'DS1', 'DS3'}:
         X_fea = np.loadtxt(feat_fpath,dtype=float,delimiter=",")
     elif dsetname == 'DS2':
         X_fea = pd.read_csv(feat_fpath).values[:,1:]
     X_fea = X_fea.astype(np.float32)
+    if fill_diag is not None:
+        np.fill_diagonal(X_fea, fill_diag)
     return get_features_from_simmatrix(X_fea)
 
 def get_features_from_simmatrix(sim_mat):
@@ -122,11 +152,33 @@ def get_features_from_simmatrix(sim_mat):
         sim_mat: np.array, mxm (drug pair similarity matrix)
     """
     r, c = np.triu_indices(len(sim_mat),1) # take indices off the diagnoal by 1
-    return np.concatenate((sim_mat[r], sim_mat[c]), axis=1)
+    return np.concatenate((sim_mat[r], sim_mat[c], sim_mat[r,c].reshape(-1,1), sim_mat[c,r].reshape(-1,1)), axis=1)
+
+# def get_features_from_simmatrix(sim_mat):
+#     """
+#     Args:
+#         sim_mat: np.array, mxm (drug pair similarity matrix)
+#     """
+#     r, c = np.triu_indices(len(sim_mat),1) # take indices off the diagnoal by 1
+#     rl, cl = np.tril_indices(len(sim_mat),0)
+#     r_comb = r.tolist() + rl.tolist()
+#     c_comb = c.tolist() + cl.tolist()
+#     return np.concatenate((sim_mat[r_comb], sim_mat[c_comb]), axis=1)
 
 def preprocess_labels(interaction_fpath, dsetname):
     interaction_mat = get_interaction_mat(interaction_fpath, dsetname)
     return get_y_from_interactionmat(interaction_mat)
+
+def get_y_from_interactionmat(interaction_mat):
+    r, c = np.triu_indices(len(interaction_mat),1) # take indices off the diagnoal by 1
+    return interaction_mat[r,c]
+
+# def get_y_from_interactionmat(interaction_mat):
+#     r, c = np.triu_indices(len(interaction_mat),1)
+#     rl, cl = np.tril_indices(len(interaction_mat),0)
+#     r_comb = r.tolist() + rl.tolist()
+#     c_comb = c.tolist() + cl.tolist()
+#     return interaction_mat[r_comb,c_comb]
 
 def compute_gip_profile(adj, bw=1.):
     """approach based on Olayan et al. https://doi.org/10.1093/bioinformatics/btx731 """
@@ -156,6 +208,15 @@ def construct_sampleid_ddipairs(interaction_mat):
     sid_ddipairs = {sid:ddi_pair for sid, ddi_pair in enumerate(zip(r,c))}
     return sid_ddipairs
 
+# def construct_sampleid_ddipairs(interaction_mat):
+#     # take indices off the diagnoal by 1
+#     r, c = np.triu_indices(len(interaction_mat),1)
+#     rl, cl = np.tril_indices(len(interaction_mat),0)
+#     r_comb = r.tolist() + rl.tolist()
+#     c_comb = c.tolist() + cl.tolist()
+#     sid_ddipairs = {sid:ddi_pair for sid, ddi_pair in enumerate(zip(r_comb, c_comb))}
+#     return sid_ddipairs
+
 def get_num_drugs(interaction_fpath, dsetname):
     if dsetname in {'DS1', 'DS3'}:
         interaction_matrix = np.loadtxt(interaction_fpath,dtype=float,delimiter=",")
@@ -177,10 +238,6 @@ def get_similarity_matrix(feat_fpath, dsetname):
         X_fea = pd.read_csv(feat_fpath).values[:,1:]
     X_fea = X_fea.astype(np.float32)
     return X_fea
-
-def get_y_from_interactionmat(interaction_mat):
-    r, c = np.triu_indices(len(interaction_mat),1) # take indices off the diagnoal by 1
-    return interaction_mat[r,c]
 
 def create_setvector_features(X, num_sim_types):
     """reshape concatenated features from every similarity type matrix into set of vectors per ddi example"""
@@ -374,7 +431,7 @@ def compute_class_weights(labels_tensor):
     classes, counts = np.unique(labels_tensor, return_counts=True)
     # print("classes", classes)
     # print("counts", counts)
-    class_weights = compute_class_weight('balanced', classes, labels_tensor.numpy())
+    class_weights = compute_class_weight('balanced', classes=classes, y=labels_tensor.numpy())
     return class_weights
 
 

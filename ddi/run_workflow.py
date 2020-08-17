@@ -6,7 +6,7 @@ from .model import NDD_Code
 # from .model_attn import DDI_Transformer
 from .model_attn_siamese import DDI_SiameseTrf, DDI_Transformer, FeatureEmbAttention
 from .dataset import construct_load_dataloaders
-from .losses import ContrastiveLoss
+from .losses import ContrastiveLoss, CosEmbLoss
 import numpy as np
 import pandas as pd
 import torch
@@ -330,6 +330,7 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
     print("class weights", class_weights)
     loss_func = torch.nn.NLLLoss(weight=class_weights, reduction='mean')  # negative log likelihood loss
     loss_contrastive = ContrastiveLoss(options.get('contrastiveloss_margin', 0.5), reduction='mean')
+    # loss_contrastive = CosEmbLoss(options.get('contrastiveloss_margin', 0.5), reduction='mean')
     loss_contrastive.type(fdtype).to(device)
     # loss_attn = FeatureEmbAttention(1)
     # loss_attn.type(fdtype).to(device)
@@ -351,7 +352,9 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
                                     pdropout=model_config.p_dropout, 
                                     num_transformer_units=model_config.num_transformer_units,
                                     pooling_mode=model_config.pooling_mode)
-        ddi_siamese = DDI_SiameseTrf(model_config.input_embed_dim,model_config.dist_opt, num_classes=2)
+        ddi_siamese = DDI_SiameseTrf(options['input_dim'],model_config.dist_opt, num_classes=2)
+
+        # ddi_siamese = DDI_SiameseTrf(model_config.input_embed_dim,model_config.dist_opt, num_classes=2)
         
     
     # define optimizer and group parameters
@@ -379,8 +382,9 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
         c_step_size = int(np.ceil(5*num_iter))  # this should be 2-10 times num_iter
         base_lr = 3e-4
         max_lr = 5*base_lr  # 3-5 times base_lr
-        # optimizer = torch.optim.Adam(models_param, weight_decay=weight_decay, lr=base_lr)
-        optimizer = torch.optim.Adam(models_param, lr=base_lr)
+        print('max lr', max_lr)
+        optimizer = torch.optim.Adam(models_param, weight_decay=weight_decay, lr=base_lr)
+        # optimizer = torch.optim.Adam(models_param, lr=base_lr)
         cyc_scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr, max_lr, step_size_up=c_step_size,
                                                         mode='triangular', cycle_momentum=False)
 
@@ -462,7 +466,8 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
                     ddi_ids.extend(ids.tolist())
 
                     cl = loss_func(logsoftmax_scores, y_batch)
-                    # dl = loss_contrastive(dist.reshape(-1), y_batch)
+                    
+                    dl = loss_contrastive(dist.reshape(-1), y_batch.type(fdtype))
                     # print(cl)
                     # print('cl', cl.shape)
                     # print('dl', dl.shape)
@@ -473,8 +478,8 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
                     # loss = loss.mean()
                     # # print(loss)
                     
-                    # loss = 0.8*cl + 0.2*dl
-                    loss = cl
+                    loss = cl + dl
+                    # loss = cl
                     # loss = 0.8*loss_func(logsoftmax_scores, y_batch) + 0.2*loss_contrastive(dist.reshape(-1), y_batch)
                     # loss = loss_func(logsoftmax_scores, y_batch)
 

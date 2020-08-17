@@ -164,9 +164,8 @@ class DDI_Transformer(nn.Module):
                 pooling_mode = 'attn'):
         
         super().__init__()
-        
-        embed_size = input_embed_dim
-
+        embed_size = input_size
+        # embed_size = input_embed_dim
         self.Wembed = nn.Linear(input_size, embed_size)
         
         trfunit_layers = [TransformerUnit(embed_size, num_attn_heads, mlp_embed_factor, nonlin_func, pdropout) for i in range(num_transformer_units)]
@@ -190,7 +189,7 @@ class DDI_Transformer(nn.Module):
             X: tensor, (batch, ddi similarity type vector, input_size)
         """
 
-        X = self.Wembed(X) 
+        # X = self.Wembed(X) 
         z = self.trfunit_pipeline(X)
         
         # mean pooling TODO: add global attention layer or other pooling strategy
@@ -225,12 +224,13 @@ class DDI_SiameseTrf(nn.Module):
             self.dist = nn.CosineSimilarity(dim=1)
             self.alpha = 1
 
-        self.pooling = FeatureEmbAttention(input_dim)
-        self.Wy = nn.Linear(input_dim+1, num_classes)
+        # self.pooling = FeatureEmbAttention(input_dim)
+        self.Wy = nn.Linear(2*input_dim+1, num_classes)
         # perform log softmax on the feature dimension
         self.log_softmax = nn.LogSoftmax(dim=-1)
 
         self._init_params_()
+        print('updated')
         
         
     def _init_params_(self):
@@ -246,13 +246,15 @@ class DDI_SiameseTrf(nn.Module):
         dist = self.dist(Z_a, Z_b).reshape(-1,1)
         # update dist to distance measure if cosine is chosen
         dist = self.alpha * (1-dist) + (1-self.alpha) * dist
-        # concat both vectors to pass to feature attention for unified representation
-        # Z_a: (batch, 1, embedding dim)
-        Z_a = Z_a.unsqueeze(1)
-        Z_b = Z_b.unsqueeze(1)
-        # Z_union: (batch, embedding dim)
-        Z_union, __ = self.pooling(torch.cat([Z_a, Z_b], axis=1))
-        # print("Z_union:", Z_union.shape)
-        out = torch.cat([Z_union, dist], axis=-1) 
+        # # concat both vectors to pass to feature attention for unified representation
+        # # Z_a: (batch, 1, embedding dim)
+        # Z_a = Z_a.unsqueeze(1)
+        # Z_b = Z_b.unsqueeze(1)
+        # # Z_union: (batch, embedding dim)
+        # Z_union, __ = self.pooling(torch.cat([Z_a, Z_b], axis=1))
+        # # print("Z_union:", Z_union.shape)
+        # out = torch.cat([Z_union, dist], axis=-1) 
+        
+        out = torch.cat([Z_a, Z_b, dist], axis=-1)
         y = self.Wy(out)
         return self.log_softmax(y), dist
