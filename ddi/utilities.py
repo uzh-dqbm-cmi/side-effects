@@ -163,7 +163,7 @@ def create_directory(folder_name, directory="current"):
         path_current_dir = directory
     print("path_current_dir", path_current_dir)
         
-    path_new_dir = os.path.join(path_current_dir, folder_name)
+    path_new_dir = os.path.normpath(os.path.join(path_current_dir, folder_name))
     if not os.path.exists(path_new_dir):
         os.makedirs(path_new_dir)
     return(path_new_dir)

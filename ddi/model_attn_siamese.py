@@ -245,3 +245,66 @@ class DDI_SiameseTrf(nn.Module):
         out = torch.cat([Z_a, Z_b, dist], axis=-1)
         y = self.Wy(out)
         return self.log_softmax(y), dist
+    
+class DDI_Transformer_Softmax(nn.Module):
+
+    def __init__(self, input_size=586, input_embed_dim=64, num_attn_heads=8, mlp_embed_factor=2, 
+                nonlin_func=nn.ReLU(), pdropout=0.3, num_transformer_units=12,
+                pooling_mode = 'attn', num_classes=2):
+        
+        super().__init__()
+        
+        embed_size = input_size #input_embed_dim
+
+        self.Wembed = nn.Linear(input_size, embed_size)
+        
+        trfunit_layers = [TransformerUnit(embed_size, num_attn_heads, mlp_embed_factor, nonlin_func, pdropout) for i in range(num_transformer_units)]
+        self.trfunit_pipeline = nn.Sequential(*trfunit_layers)
+
+        self.Wy = nn.Linear(embed_size, num_classes)
+        self.pooling_mode = pooling_mode
+        if pooling_mode == 'attn':
+            self.pooling = FeatureEmbAttention(embed_size)
+        elif pooling_mode == 'mean':
+            self.pooling = torch.mean
+
+        # perform log softmax on the feature dimension
+        self.log_softmax = nn.LogSoftmax(dim=-1)
+        self._init_params_()
+        
+        
+    def _init_params_(self):
+        for p_name, p in self.named_parameters():
+            param_dim = p.dim()
+            if param_dim > 1: # weight matrices
+                nn.init.xavier_uniform_(p)
+            elif param_dim == 1: # bias parameters
+                if p_name.endswith('bias'):
+                    nn.init.uniform_(p, a=-1.0, b=1.0)
+    
+    def forward(self, X):
+        """
+        Args:
+            X: tensor, (batch, ddi similarity type vector, input_size)
+        """
+
+        X = self.Wembed(X) 
+        z = self.trfunit_pipeline(X)
+        
+        # mean pooling TODO: add global attention layer or other pooling strategy
+        # pool across similarity type vectors
+        # Note: z.mean(dim=1) will change shape of z to become (batch, input_size)
+        # we can keep dimension by running z.mean(dim=1, keepdim=True) to have (batch, 1, input_size)
+
+        # pool across similarity type vectors
+        if self.pooling_mode == 'attn':
+            z, fattn_w_norm = self.pooling(z)
+        # Note: z.mean(dim=1) or self.pooling(z, dim=1) will change shape of z to become (batch, embedding dim)
+        # we can keep dimension by running z.mean(dim=1, keepdim=True) to have (batch, 1, embedding dim)
+        elif self.pooling_mode == 'mean':
+            z = self.pooling(z, dim=1)
+            fattn_w_norm = None
+
+        y = self.Wy(z) 
+        
+        return self.log_softmax(y) #,fattn_w_norm

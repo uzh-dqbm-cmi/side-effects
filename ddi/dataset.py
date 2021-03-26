@@ -12,9 +12,11 @@ from .utilities import ModelScore, ReaderWriter
 
 class DDIDataTensor(Dataset):
 
-    def __init__(self, X_a, X_b, y):
+    def __init__(self, y, X_a, X_b):
+          
         self.X_a = X_a # tensor.float32, (drug pairs, features)
         self.X_b = X_b # tensor.float32, (drug pairs, features)
+        
         # drug interactions
         self.y = y  # tensor.float32, (drug pairs,)
         self.num_samples = self.y.size(0)  # int, number of drug pairs
@@ -44,22 +46,28 @@ class GIPDataTensor(Dataset):
 
 class PartitionDataTensor(Dataset):
 
-    def __init__(self, ddi_datatensor, gip_datatensor, partition_ids, dsettype, fold_num):
+    def __init__(self, ddi_datatensor, gip_datatensor, partition_ids, dsettype, fold_num, is_siamese):
         self.ddi_datatensor = ddi_datatensor  # instance of :class:`DDIDataTensor`
         self.gip_datatensor = gip_datatensor # instance of :class:`GIPDataTensor`
         self.partition_ids = partition_ids  # list of indices for drug pairs
         self.dsettype = dsettype  # string, dataset type (i.e. train, validation, test)
         self.fold_num = fold_num  # int, fold number
         self.num_samples = len(self.partition_ids)  # int, number of docs in the partition
+        self.is_siamese = is_siamese
 
     def __getitem__(self, indx):
         target_id = self.partition_ids[indx]
-        X_a, X_b, y, ddi_indx = self.ddi_datatensor[target_id]
         X_a_gip, X_b_gip, gip_indx = self.gip_datatensor[target_id]
         # combine gip with other matrices
+        X_a, X_b, y, ddi_indx = self.ddi_datatensor[target_id]
         X_a_comb = torch.cat([X_a, X_a_gip], axis=0)
         X_b_comb = torch.cat([X_b, X_b_gip], axis=0)
-        return X_a_comb, X_b_comb, y, ddi_indx
+        X_comb = torch.cat([X_a_comb, X_b_comb])#.view(-1)
+        
+        if (self.is_siamese):
+            return X_a_comb, X_b_comb, y, ddi_indx
+        else:
+            return X_comb, y, ddi_indx
         
     def __len__(self):
         return(self.num_samples)
@@ -271,14 +279,14 @@ def report_label_distrib(labels):
         print("class:", label, "norm count:", norm_counts[i])
 
 
-def generate_partition_datatensor(ddi_datatensor, gip_dtensor_perfold, data_partitions):
+def generate_partition_datatensor(ddi_datatensor, gip_dtensor_perfold, data_partitions, is_siamese):
     datatensor_partitions = {}
     for fold_num in data_partitions:
         datatensor_partitions[fold_num] = {}
         gip_datatensor = gip_dtensor_perfold[fold_num]
         for dsettype in data_partitions[fold_num]:
             target_ids = data_partitions[fold_num][dsettype]
-            datatensor_partition = PartitionDataTensor(ddi_datatensor, gip_datatensor, target_ids, dsettype, fold_num)
+            datatensor_partition = PartitionDataTensor(ddi_datatensor, gip_datatensor, target_ids, dsettype, fold_num, is_siamese)
             datatensor_partitions[fold_num][dsettype] = datatensor_partition
     compute_class_weights_per_fold_(datatensor_partitions)
 

@@ -3,8 +3,6 @@ setup.py
 ddi/__init__.py
 ddi/dataset.py
 ddi/losses.py
-ddi/model.py
-ddi/model_attn.py
 ddi/model_attn_siamese.py
 ddi/run_workflow.py
 ddi/utilities.py

@@ -3,7 +3,7 @@ import os
 import itertools
 from .utilities import get_device, create_directory, ReaderWriter, perfmetric_report, plot_loss, add_weight_decay_except_attn
 from .model import NDD_Code
-from .model_attn_siamese import DDI_SiameseTrf, DDI_Transformer, FeatureEmbAttention
+from .model_attn_siamese import DDI_SiameseTrf, DDI_Transformer, DDI_Transformer_Softmax, FeatureEmbAttention
 from .dataset import construct_load_dataloaders
 from .losses import ContrastiveLoss, CosEmbLoss
 import numpy as np
@@ -164,23 +164,33 @@ def run_ddi(data_partition, dsettypes, config, options, wrk_dir,
     data_loaders, epoch_loss_avgbatch, score_dict, class_weights, flog_out = cld
     device = get_device(to_gpu, gpu_index)  # gpu device
     fdtype = options['fdtype']
-    if('train' in class_weights):
-        class_weights = class_weights['train'][1].type(fdtype).to(device)  # update class weights to fdtype tensor
-    else:
-        class_weights = torch.tensor([1]).type(fdtype).to(device)  # weighting all casess equally
-
-    print("class weights", class_weights)
-    # binary cross entropy
-    loss_func = torch.nn.BCEWithLogitsLoss(pos_weight=class_weights, reduction='mean')
-
+    
     num_epochs = options.get('num_epochs', 50)
     fold_num = options.get('fold_num')
 
     # parse config dict
     model_config = config['model_config']
     model_name = options['model_name']
+    
+    if(model_name == 'NDD'):
+        if('train' in class_weights):
+            class_weights = class_weights['train'][1].type(fdtype).to(device)  # update class weights to fdtype tensor
+        else:
+            class_weights = torch.tensor([1]).type(fdtype).to(device)  # weighting all casess equally
+    
+    elif(model_name == 'Transformer'):
+        if('train' in class_weights):
+            class_weights = class_weights['train'].type(fdtype).to(device)  # update class weights to fdtype tensor
+        else:
+            class_weights = torch.tensor([1]*2).type(fdtype).to(device)  # weighting all casess equally
 
+    print("class weights", class_weights)
+    # binary cross entropy
+    loss_bce = torch.nn.BCEWithLogitsLoss(pos_weight=class_weights, reduction='mean')
+    loss_nlll = torch.nn.NLLLoss(weight=class_weights, reduction='mean')  # negative log likelihood loss
 
+    print("run_ddi model_name:", model_name)
+    
     if(model_name == 'NDD'):
         # ddi model
         ddi_model = NDD_Code(D_in=options['input_dim'],
@@ -188,15 +198,25 @@ def run_ddi(data_partition, dsettypes, config, options, wrk_dir,
                             H2=model_config.fc2_dim,
                             D_out=1,
                             drop=model_config.p_dropout)
+        
+    elif(model_name == 'Transformer'):
+        ddi_model = DDI_Transformer_Softmax(input_size=options['input_dim'],
+                                input_embed_dim=model_config.input_embed_dim, 
+                                num_attn_heads=model_config.num_attn_heads, 
+                                mlp_embed_factor=model_config.mlp_embed_factor,
+                                nonlin_func=model_config.nonlin_func,
+                                pdropout=model_config.p_dropout, 
+                                num_transformer_units=model_config.num_transformer_units,
+                                pooling_mode=model_config.pooling_mode)
+              
     
     # define optimizer and group parameters
     models_param = list(ddi_model.parameters())
     models = [(ddi_model, model_name)]
-
+    
     if(state_dict_dir):  # load state dictionary of saved models
-        num_train_epochs = 20
         for m, m_name in models:
-            m.load_state_dict(torch.load(os.path.join(state_dict_dir, '{}_{}.pkl'.format(m_name, num_train_epochs)), map_location=device))
+            m.load_state_dict(torch.load(os.path.join(state_dict_dir, '{}.pkl'.format(m_name)), map_location=device))
 
     # update models fdtype and move to device
     for m, m_name in models:
@@ -252,23 +272,45 @@ def run_ddi(data_partition, dsettypes, config, options, wrk_dir,
 
                 X_batch, y_batch, ids = samples_batch
 
+                if(model_name == 'NDD'):
+                    X_batch = torch.flatten(X_batch, 1)
+
                 X_batch = X_batch.to(device)
-                y_batch = y_batch.reshape(-1, 1)
-                y_batch = y_batch.to(device)
+
 
                 with torch.set_grad_enabled(dsettype == 'train'):
                     num_samples_perbatch = X_batch.size(0)
-                    y_pred_logit = ddi_model(X_batch)
-                    y_pred_prob  = sigmoid(y_pred_logit)
-                    y_pred_clss = torch.zeros(y_pred_prob.shape, device=device, dtype=torch.int32)
-                    y_pred_clss[y_pred_prob > 0.5] = 1
+                    
+                    if(model_name == 'NDD'):
+                        y_pred_logit = ddi_model(X_batch)
+                        y_pred_prob  = sigmoid(y_pred_logit)
+                        y_pred_clss = torch.zeros(y_pred_prob.shape, device=device, dtype=torch.int32)
+                        y_pred_clss[y_pred_prob > 0.5] = 1
+                        
+                        y_batch = y_batch.reshape(-1, 1)
+                        y_batch = y_batch.type(torch.int64).to(device)
+                        loss = loss_bce(y_pred_logit, y_batch.type(fdtype))
+
+        
+                    elif(model_name == 'Transformer'):
+                        logsoftmax_scores = ddi_model(X_batch)
+                    
+                        __, y_pred_clss = torch.max(logsoftmax_scores, -1)
+                        y_pred_prob  = torch.exp(logsoftmax_scores.detach().cpu()).numpy()
+                        
+                        y_batch = y_batch.reshape(-1)
+                        y_batch = y_batch.type(torch.int64).to(device)
+                        
+                        loss = loss_nlll(logsoftmax_scores, y_batch)
+            
 
                     pred_class.extend(y_pred_clss.view(-1).tolist())
                     ref_class.extend(y_batch.view(-1).tolist())
-                    prob_scores.extend(y_pred_prob.view(-1).tolist())
+#                     prob_scores.append(y_pred_prob.view(-1).tolist())
+                    prob_scores.append(y_pred_prob.tolist())
                     ddi_ids.extend(ids.tolist())
+                
 
-                    loss = loss_func(y_pred_logit, y_batch)
                     if(dsettype == 'train'):
                         # backward step (i.e. compute gradients)
                         loss.backward()
@@ -279,9 +321,14 @@ def run_ddi(data_partition, dsettypes, config, options, wrk_dir,
                     epoch_loss += loss.item()
 
             epoch_loss_avgbatch[dsettype].append(epoch_loss/len(data_loader))
-            modelscore = perfmetric_report(pred_class, ref_class, prob_scores, epoch+1, flog_out[dsettype])
+#             modelscore = perfmetric_report(pred_class, ref_class, prob_scores, epoch+1, flog_out[dsettype])
             prob_scores_arr = np.concatenate(prob_scores, axis=0)
-
+            
+            if(model_name == 'NDD'):
+                modelscore = perfmetric_report(pred_class, ref_class, prob_scores_arr, epoch, flog_out[dsettype])
+            elif(model_name == 'Transformer'):
+                modelscore = perfmetric_report(pred_class, ref_class, prob_scores_arr[:,1], epoch, flog_out[dsettype])
+    
             perf = modelscore.s_aupr
             if(perf > score_dict[dsettype].s_aupr):
                 score_dict[dsettype] = modelscore
@@ -297,6 +344,7 @@ def run_ddi(data_partition, dsettypes, config, options, wrk_dir,
         plot_loss(epoch_loss_avgbatch, fig_dir)
     # dump_scores
     dump_dict_content(score_dict, list(score_dict.keys()), 'score', wrk_dir)
+
 
 def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
             state_dict_dir=None, to_gpu=True, gpu_index=0):
@@ -328,7 +376,8 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
     model_config = config['model_config']
     model_name = options['model_name']
 
-
+    print("run_ddiTrf model_name:", model_name)
+    
     if(model_name == 'Transformer'):
         ddi_model = DDI_Transformer(input_size=options['input_dim'],
                                     input_embed_dim=model_config.input_embed_dim, 
@@ -434,6 +483,7 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
                     __, y_pred_clss = torch.max(logsoftmax_scores, -1)
 
                     y_pred_prob  = torch.exp(logsoftmax_scores.detach().cpu()).numpy()
+#                     print("y_pred_prob shape", y_pred_prob.shape)
                     
                     pred_class.extend(y_pred_clss.view(-1).tolist())
                     ref_class.extend(y_batch.view(-1).tolist())
@@ -615,6 +665,7 @@ def train_val_run(datatensor_partitions, config_map, train_val_dir, fold_gpu_map
         options['fold_num'] = fold_num
         data_partition = datatensor_partitions[fold_num]
         path = os.path.join(train_val_dir, 'train_val', 'fold_{}'.format(fold_num))
+        # normpath
         wrk_dir = create_directory(path)
         print(wrk_dir)
         if options.get('loss_func') == 'bceloss':
