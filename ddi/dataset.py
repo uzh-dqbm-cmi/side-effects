@@ -11,10 +11,12 @@ from .utilities import ModelScore, ReaderWriter
 
 
 class DDIDataTensor(Dataset):
-
-    def __init__(self, X_a, X_b, y):
+    
+    def __init__(self, y, X_a, X_b):
+          
         self.X_a = X_a # tensor.float32, (drug pairs, features)
         self.X_b = X_b # tensor.float32, (drug pairs, features)
+        
         # drug interactions
         self.y = y  # tensor.float32, (drug pairs,)
         self.num_samples = self.y.size(0)  # int, number of drug pairs
@@ -44,23 +46,28 @@ class GIPDataTensor(Dataset):
 
 class PartitionDataTensor(Dataset):
 
-    def __init__(self, ddi_datatensor, gip_datatensor, partition_ids, dsettype, fold_num):
+    def __init__(self, ddi_datatensor, gip_datatensor, partition_ids, dsettype, fold_num, is_siamese):
         self.ddi_datatensor = ddi_datatensor  # instance of :class:`DDIDataTensor`
         self.gip_datatensor = gip_datatensor # instance of :class:`GIPDataTensor`
         self.partition_ids = partition_ids  # list of indices for drug pairs
         self.dsettype = dsettype  # string, dataset type (i.e. train, validation, test)
         self.fold_num = fold_num  # int, fold number
         self.num_samples = len(self.partition_ids)  # int, number of docs in the partition
-
+        self.is_siamese = is_siamese
+        
     def __getitem__(self, indx):
         target_id = self.partition_ids[indx]
-        X_a, X_b, y, ddi_indx = self.ddi_datatensor[target_id]
         X_a_gip, X_b_gip, gip_indx = self.gip_datatensor[target_id]
-        # assert ddi_indx == gip_indx
         # combine gip with other matrices
+        X_a, X_b, y, ddi_indx = self.ddi_datatensor[target_id]
         X_a_comb = torch.cat([X_a, X_a_gip], axis=0)
         X_b_comb = torch.cat([X_b, X_b_gip], axis=0)
-        return X_a_comb, X_b_comb, y, ddi_indx
+        X_comb = torch.cat([X_a_comb, X_b_comb])#.view(-1)
+        
+        if (self.is_siamese):
+            return X_a_comb, X_b_comb, y, ddi_indx
+        else:
+            return X_comb, y, ddi_indx
         
     def __len__(self):
         return(self.num_samples)
@@ -324,82 +331,6 @@ def validate_partitions(data_partitions, drugpairs_ids, valid_set_portion=0.1, t
     print("passed intersection and overlap test (i.e. train, validation and test sets are not",
           "intersecting in each fold and the concatenation of test sets from each fold is",
           "equivalent to the whole dataset)")
-          
-# def get_stratified_partitions(ddi_datatensor, num_folds=5, random_state=42):
-#     """Generate 5-fold stratified sample of drug-pair ids based on the interaction label
-
-#     Args:
-#         ddi_datatensor: instance of :class:`DDIDataTensor`
-#     """
-#     skf_trte = StratifiedKFold(n_splits=num_folds, random_state=random_state, shuffle=True)  # split train and test
-#     data_partitions = {}
-#     X = ddi_datatensor.X_feat
-#     y = ddi_datatensor.y
-#     fold_num = 0
-#     for train_index, test_index in skf_trte.split(X,y):
-    
-#         data_partitions[fold_num] = {'train': train_index,
-#                                      'test': test_index}
-#         print("fold_num:", fold_num)
-#         print('train data')
-#         report_label_distrib(y[train_index])
-#         print('test data')
-#         report_label_distrib(y[test_index])
-#         print()
-#         fold_num += 1
-#         print("-"*25)
-#     return(data_partitions)
-
-# def validate_partitions(data_partitions, drugpairs_ids, valid_set_portion=0.1, test_set_portion=0.2):
-#     if(not isinstance(drugpairs_ids, set)):
-#         drugpairs_ids = set(drugpairs_ids)
-#     num_pairs = len(drugpairs_ids)
-#     test_set_accum = set([])
-#     for fold_num in data_partitions:
-#         print('fold_num', fold_num)
-#         tr_ids = data_partitions[fold_num]['train']
-#         te_ids = data_partitions[fold_num]['test']
-
-#         tr_te = set(tr_ids).intersection(te_ids)
-#         # assert there is no overlap among train and test partition within a fold
-#         assert len(tr_te) == 0
-#         print('expected test set size:', test_set_portion*num_pairs, '; actual test set size:', len(te_ids))
-#         print()
-#         assert np.abs(test_set_portion*num_pairs - len(te_ids)) <= 2
-#         test_set_accum = test_set_accum.union(te_ids)
-#     # verify that assembling test sets from each of the five folds would be equivalent to all drugpair ids
-#     assert len(test_set_accum) == num_pairs
-#     assert test_set_accum == drugpairs_ids
-#     print("passed intersection and overlap test (i.e. train, validation and test sets are not",
-#           "intersecting in each fold and the concatenation of test sets from each fold is",
-#           "equivalent to the whole dataset)")
-
-# def get_validation_partitions(ddi_datatensor, num_folds=2, valid_set_portion=0.1, random_state=42):
-#     """Generate stratified train/validation split of drug-pair ids based on the interaction label
-
-#     Args:
-#         ddi_datatensor: instance of :class:`DDIDataTensor`
-#     """
-#     skf_trte = StratifiedShuffleSplit(n_splits=num_folds, 
-#                                       test_size=valid_set_portion, 
-#                                       random_state=random_state)  # split train and test
-#     data_partitions = {}
-#     X = ddi_datatensor.X_feat
-#     y = ddi_datatensor.y
-#     fold_num = 0
-#     for train_index, test_index in skf_trte.split(X,y):
-    
-#         data_partitions[fold_num] = {'train': train_index,
-#                                      'validation': test_index}
-#         print("fold_num:", fold_num)
-#         print('train data')
-#         report_label_distrib(y[train_index])
-#         print('validation data')
-#         report_label_distrib(y[test_index])
-#         print()
-#         fold_num += 1
-#         print("-"*25)
-#     return(data_partitions)
 
 def report_label_distrib(labels):
     classes, counts = np.unique(labels, return_counts=True)
@@ -408,15 +339,14 @@ def report_label_distrib(labels):
         print("class:", label, "norm count:", norm_counts[i])
 
 
-def generate_partition_datatensor(ddi_datatensor, gip_dtensor_perfold, data_partitions):
+def generate_partition_datatensor(ddi_datatensor, gip_dtensor_perfold, data_partitions, is_siamese):
     datatensor_partitions = {}
-    print('hello')
     for fold_num in data_partitions:
         datatensor_partitions[fold_num] = {}
         gip_datatensor = gip_dtensor_perfold[fold_num]
         for dsettype in data_partitions[fold_num]:
             target_ids = data_partitions[fold_num][dsettype]
-            datatensor_partition = PartitionDataTensor(ddi_datatensor, gip_datatensor, target_ids, dsettype, fold_num)
+            datatensor_partition = PartitionDataTensor(ddi_datatensor, gip_datatensor, target_ids, dsettype, fold_num, is_siamese)
             datatensor_partitions[fold_num][dsettype] = datatensor_partition
     compute_class_weights_per_fold_(datatensor_partitions)
 

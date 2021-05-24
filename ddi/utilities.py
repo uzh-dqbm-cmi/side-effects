@@ -7,6 +7,7 @@ import pandas as pd
 from sklearn.metrics import classification_report, f1_score, roc_curve, precision_recall_curve, accuracy_score, \
                             recall_score, precision_score, roc_auc_score, auc, average_precision_score
 from matplotlib import pyplot as plt
+from os.path import dirname, abspath
 
 
 class ModelScore:
@@ -35,11 +36,11 @@ def get_performance_results(similarity_type, target_dir, num_folds, dsettype):
     for fold_num in range(num_folds):
 
         fold_dir = os.path.join(target_dir,
-                                '{}_{}'.format(prefix, similarity_type),
-                                'fold_{}'.format(fold_num))
+                '{}'.format(prefix),
+                'fold_{}'.format(fold_num))
 
         score_file = os.path.join(fold_dir, 'score_{}.pkl'.format(dsettype))
-        # print(score_file)
+
         if os.path.isfile(score_file):
             mscore = ReaderWriter.read_data(score_file)
             perf_dict[0]['fold{}'.format(fold_num)] = mscore.s_auc
@@ -63,7 +64,7 @@ def build_performance_dfs(similarity_types, target_dir, num_folds, dsettype):
     auc_df = pd.DataFrame()
     aupr_df = pd.DataFrame()
     f1_df = pd.DataFrame()
-    target_dir = create_directory(target_dir)
+    target_dir = create_directory(target_dir, directory="parent")
     print(target_dir)
     for sim_type in similarity_types:
         s_auc, s_aupr, s_f1 = get_performance_results(sim_type, target_dir, num_folds, dsettype)
@@ -156,9 +157,13 @@ def create_directory(folder_name, directory="current"):
     """
     if directory == "current":
         path_current_dir = os.path.dirname(__file__)  # __file__ refers to utilities.py
+    elif directory == "parent":
+        path_current_dir = dirname(dirname(abspath(__file__)))
     else:
         path_current_dir = directory
-    path_new_dir = os.path.join(path_current_dir, folder_name)
+    print("path_current_dir", path_current_dir)
+        
+    path_new_dir = os.path.normpath(os.path.join(path_current_dir, folder_name))
     if not os.path.exists(path_new_dir):
         os.makedirs(path_new_dir)
     return(path_new_dir)
@@ -204,14 +209,6 @@ def get_interaction_stat(matrix):
     print('diagnoal elements ', np.diag(matrix))
 
 def perfmetric_report(pred_target, ref_target, probscore, epoch, outlog):
-
-    # print(ref_target.shape)
-    # print(pred_target.shape)
-    #
-    # print("ref_target \n", ref_target)
-    # print("pred_target \n", pred_target)
-    
-
     lsep = "\n"
     report = "Epoch: {}".format(epoch) + lsep
     report += "Classification report on all events:" + lsep
@@ -269,18 +266,6 @@ def plot_roc_curve(ref_target, prob_poslabel, figname, outdir):
     plt.savefig(os.path.join(outdir, os.path.join('roc_curve_{}'.format(figname) + ".pdf")))
     plt.close()
 
-
-# def plot_loss(epoch_loss_avgbatch, epoch_loss_avgsamples, wrk_dir):
-#     dsettypes = epoch_loss_avgbatch.keys()
-#     for dsettype in dsettypes:
-#         plt.figure(figsize=(9, 6))
-#         plt.plot(epoch_loss_avgbatch[dsettype], 'r', epoch_loss_avgsamples[dsettype], 'b')
-#         plt.xlabel("number of epochs")
-#         plt.ylabel("negative loglikelihood cost")
-#         plt.legend(['epoch batch average loss', 'epoch training samples average loss'])
-#         plt.savefig(os.path.join(wrk_dir, os.path.join(dsettype + ".pdf")))
-#         plt.close()
-
 def plot_loss(epoch_loss_avgbatch, wrk_dir):
     dsettypes = epoch_loss_avgbatch.keys()
     for dsettype in dsettypes:
@@ -309,13 +294,9 @@ def find_youdenj_threshold(ref_target, prob_poslabel, fig_dir=None):
     thresholds[0] = 1
     plt.figure(figsize=(9, 6))
     plt.plot(fpr, tpr, 'b+', label=f'TPR vs FPR => AUC:{s_auc:.2}')
-#     plt.plot(fpr, thresholds, 'r-', label='thresholds')
     plt.xlabel('False positive rate')
     plt.ylabel('True positive rate')
     plt.title('ROC curve')
-    # youden index is max(sensitivity + specificity - 1)
-    # max(tpr + (1-fpr) - 1)
-    # max(tpr - fpr)
     youden_indx = np.argmax(tpr - fpr) # the index where the difference between tpr and fpr is max
     optimal_threshold = thresholds[youden_indx]
     plt.plot(fpr[youden_indx], tpr[youden_indx], marker='o', markersize=3, color="red", label=f'optimal probability threshold:{optimal_threshold:.2}')

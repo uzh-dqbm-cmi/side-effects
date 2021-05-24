@@ -59,6 +59,7 @@ class CosEmbLoss(nn.Module):
         # repel = target * (0.5 * torch.pow(torch.clamp(margin - dist, min=0.0), 2))
         # attract = (1-target) * 0.5 * torch.pow(dist, 2) 
 
+        
         if reduction == 'mean':
             loss_contrastive = torch.mean(repel + attract)
         elif reduction == 'sum':
