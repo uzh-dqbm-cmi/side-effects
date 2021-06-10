@@ -718,11 +718,18 @@ def test_run(datatensor_partitions,
         else:
             print('WARNING: train dir not found: {}'.format(path))
 
-def train_test_partition(datatensor_partition, config_map, tr_val_dir, fold_gpu_map):
+# def train_test_partition(datatensor_partition, config_map, tr_val_dir, fold_gpu_map):
+#     config_epochs = config_map[0]['model_config'].num_epochs
+#     print(config_epochs)
+#     train_val_run(datatensor_partition, config_map, tr_val_dir, fold_gpu_map, num_epochs=config_epochs)
+#     test_run(datatensor_partition, config_map, tr_val_dir, tr_val_dir, fold_gpu_map, num_epochs=1)
+   
+def train_test_partition(gpu_num, datatensor_partition, config_map, tr_val_dir, fold_gpu_map, queue):
     config_epochs = config_map[0]['model_config'].num_epochs
     print(config_epochs)
     train_val_run(datatensor_partition, config_map, tr_val_dir, fold_gpu_map, num_epochs=config_epochs)
     test_run(datatensor_partition, config_map, tr_val_dir, tr_val_dir, fold_gpu_map, num_epochs=1)
+    queue.put(gpu_num)
     
 def test_partition(datatensor_partition, config_map, tr_val_dir, fold_gpu_map, suffix_testfname):
     config_epochs = config_map[0]['model_config'].num_epochs
