@@ -58,16 +58,19 @@ class MH_SelfAttention(nn.Module):
         Args:
             X: tensor, (batch, ddi similarity type vector, input_size)
         """
-        
+        bsize, num_modal, inp_dim = X.shape
+        attn_tensor = X.new_zeros((bsize, num_modal, num_modal))
         out = []
         for SH_layer in self.multihead_pipeline:
-            z, __ = SH_layer(X)
+            z, attn_w_normalized = SH_layer(X)
             out.append(z)
+            attn_tensor += attn_w_normalized
         # concat on the feature dimension
         out = torch.cat(out, -1) 
+        attn_tensor = attn_tensor/len(self.multihead_pipeline)
         
         # return a unified vector mapping of the different self-attention blocks
-        return self.Wz(out)
+        return self.Wz(out), attn_tensor
         
 
 class TransformerUnit(nn.Module):
@@ -98,7 +101,7 @@ class TransformerUnit(nn.Module):
             X: tensor, (batch, ddi similarity type vector, input_size)
         """
         # z is tensor of size (batch, ddi similarity type vector, input_size)
-        z = self.multihead_attn(X)
+        z, attn_tensor = self.multihead_attn(X)
         # layer norm with residual connection
         z = self.layernorm_1(z + X)
         z = self.dropout(z)
@@ -106,7 +109,7 @@ class TransformerUnit(nn.Module):
         z = self.layernorm_2(z_ff + z)
         z = self.dropout(z)
         
-        return z
+        return z, attn_tensor
         
 class FeatureEmbAttention(nn.Module):
     def __init__(self, input_dim):
@@ -167,7 +170,7 @@ class DDI_Transformer(nn.Module):
         self.Wembed = nn.Linear(input_size, embed_size)
         
         trfunit_layers = [TransformerUnit(embed_size, num_attn_heads, mlp_embed_factor, nonlin_func, pdropout) for i in range(num_transformer_units)]
-        self.trfunit_pipeline = nn.Sequential(*trfunit_layers)
+        self.trfunit_pipeline = nn.ModuleList(trfunit_layers)
 
         self.pooling_mode = pooling_mode
         if pooling_mode == 'attn':
@@ -187,9 +190,15 @@ class DDI_Transformer(nn.Module):
             X: tensor, (batch, ddi similarity type vector, input_size)
         """
 
-        # X = self.Wembed(X)         
         # mean pooling TODO: add global attention layer or other pooling strategy
-        z = self.trfunit_pipeline(X)
+        bsize, num_modal, inp_dim = X.shape
+        attn_tensor = X.new_zeros((bsize, num_modal, num_modal))
+        xinput = X
+        for encunit in self.trfunit_pipeline:
+            z, attn_h_tensor = encunit(xinput)
+            xinput = z
+            attn_tensor += attn_h_tensor
+        attn_tensor = attn_tensor/len(self.trfunit_pipeline)
         
         # pool across similarity type vectors
         # Note: z.mean(dim=1) will change shape of z to become (batch, input_size)
@@ -204,7 +213,7 @@ class DDI_Transformer(nn.Module):
             z = self.pooling(z, dim=1)
             fattn_w_norm = None
         
-        return z, fattn_w_norm
+        return z, fattn_w_norm, attn_tensor
 
 class DDI_SiameseTrf(nn.Module):
 
@@ -226,9 +235,7 @@ class DDI_SiameseTrf(nn.Module):
         # perform log softmax on the feature dimension
         self.log_softmax = nn.LogSoftmax(dim=-1)
 
-        self._init_params_()
-        print('updated')
-        
+        self._init_params_()        
         
     def _init_params_(self):
         _init_model_params(self.named_parameters())

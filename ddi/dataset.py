@@ -12,7 +12,7 @@ from .utilities import ModelScore, ReaderWriter
 
 class DDIDataTensor(Dataset):
     
-    def __init__(self, y, X_a, X_b):
+    def __init__(self, X_a, X_b, y):
           
         self.X_a = X_a # tensor.float32, (drug pairs, features)
         self.X_b = X_b # tensor.float32, (drug pairs, features)
@@ -46,7 +46,7 @@ class GIPDataTensor(Dataset):
 
 class PartitionDataTensor(Dataset):
 
-    def __init__(self, ddi_datatensor, gip_datatensor, partition_ids, dsettype, fold_num, is_siamese):
+    def __init__(self, ddi_datatensor, gip_datatensor, partition_ids, dsettype, fold_num, is_siamese=True):
         self.ddi_datatensor = ddi_datatensor  # instance of :class:`DDIDataTensor`
         self.gip_datatensor = gip_datatensor # instance of :class:`GIPDataTensor`
         self.partition_ids = partition_ids  # list of indices for drug pairs
@@ -60,6 +60,7 @@ class PartitionDataTensor(Dataset):
         X_a_gip, X_b_gip, gip_indx = self.gip_datatensor[target_id]
         # combine gip with other matrices
         X_a, X_b, y, ddi_indx = self.ddi_datatensor[target_id]
+        # (sim_types, features)
         X_a_comb = torch.cat([X_a, X_a_gip], axis=0)
         X_b_comb = torch.cat([X_b, X_b_gip], axis=0)
         X_comb = torch.cat([X_a_comb, X_b_comb])#.view(-1)
@@ -187,27 +188,6 @@ def get_y_from_interactionmat(interaction_mat):
 #     c_comb = c.tolist() + cl.tolist()
 #     return interaction_mat[r_comb,c_comb]
 
-def compute_gip_profile(adj, bw=1.):
-    """approach based on Olayan et al. https://doi.org/10.1093/bioinformatics/btx731 """
-    
-    ga = np.dot(adj,np.transpose(adj))
-    ga = bw*ga/np.mean(np.diag(ga))
-    di = np.diag(ga)
-    x =  np.tile(di,(1,di.shape[0])).reshape(di.shape[0],di.shape[0])
-    d =x+np.transpose(x)-2*ga
-    return np.exp(-d)
-
-def compute_kernel(mat, k_bandwidth, epsilon=1e-9):
-    """computes gaussian kernel from 2D matrix
-    
-       Approach based on van Laarhoven et al. doi:10.1093/bioinformatics/btr500
-    
-    """
-    r, c = mat.shape # 2D matrix
-    # computes pairwise l2 distance
-    dist_kernel = squareform(pdist(mat, metric='euclidean')**2)
-    gamma = k_bandwidth/(np.clip((scpnorm(mat, axis=1, keepdims=True)**2) * 1/c, a_min=epsilon, a_max=None))
-    return np.exp(-gamma*dist_kernel)
 
 def construct_sampleid_ddipairs(interaction_mat):
     # take indices off the diagnoal by 1
@@ -339,7 +319,7 @@ def report_label_distrib(labels):
         print("class:", label, "norm count:", norm_counts[i])
 
 
-def generate_partition_datatensor(ddi_datatensor, gip_dtensor_perfold, data_partitions, is_siamese):
+def generate_partition_datatensor(ddi_datatensor, gip_dtensor_perfold, data_partitions, is_siamese=True):
     datatensor_partitions = {}
     for fold_num in data_partitions:
         datatensor_partitions[fold_num] = {}

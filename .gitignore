@@ -51,5 +51,7 @@ venv.bak/
 # orisenbazuru
 explore.py
 notebooks/orisenbazuru/*
-cluster/data/medinfmk/ddi/processed/*
+notebooks/archive/*
 ideas.txt.rtf
+trained_models
+data/processed

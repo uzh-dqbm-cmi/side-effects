@@ -25,7 +25,7 @@ class ModelScore:
                "".format(self.best_epoch_indx, self.s_auc, self.s_aupr, self.s_f1, self.s_precision, self.s_recall)
         return desc
 
-def get_performance_results(similarity_type, target_dir, num_folds, dsettype):
+def get_performance_results(similarity_type, target_dir, num_folds, dsettype, suffix_testfname=None):
     all_perf = {}
     num_metrics = 3 # number of metrics to focus on
     perf_dict = [{} for i in range(num_metrics)]  # track auc, aupr, f1 measure
@@ -33,13 +33,18 @@ def get_performance_results(similarity_type, target_dir, num_folds, dsettype):
         prefix = 'train_val'
     else:
         prefix = dsettype
+        if suffix_testfname:
+            prefix = prefix + "_" + suffix_testfname
+
     for fold_num in range(num_folds):
 
         fold_dir = os.path.join(target_dir,
                 '{}'.format(prefix),
                 'fold_{}'.format(fold_num))
+        # print('fold_dir:', fold_dir)
 
         score_file = os.path.join(fold_dir, 'score_{}.pkl'.format(dsettype))
+        # print(score_file)
 
         if os.path.isfile(score_file):
             mscore = ReaderWriter.read_data(score_file)
@@ -60,14 +65,22 @@ def get_performance_results(similarity_type, target_dir, num_folds, dsettype):
     return perf_df
 
 
-def build_performance_dfs(similarity_types, target_dir, num_folds, dsettype):
+def build_performance_dfs(similarity_types, target_dir, num_folds, dsettype, suffix_testfname=None):
     auc_df = pd.DataFrame()
     aupr_df = pd.DataFrame()
     f1_df = pd.DataFrame()
     target_dir = create_directory(target_dir, directory="parent")
     print(target_dir)
     for sim_type in similarity_types:
-        s_auc, s_aupr, s_f1 = get_performance_results(sim_type, target_dir, num_folds, dsettype)
+        if suffix_testfname is not None:
+            suff_testfname = suffix_testfname + sim_type
+        else:
+            suff_testfname = None
+        s_auc, s_aupr, s_f1 = get_performance_results(sim_type, 
+                                                      target_dir, 
+                                                      num_folds, 
+                                                      dsettype, 
+                                                      suffix_testfname=suff_testfname)
         auc_df = pd.concat([auc_df, s_auc], sort=True)
         aupr_df = pd.concat([aupr_df, s_aupr], sort=True)
         f1_df = pd.concat([f1_df, s_f1], sort=True)
@@ -277,7 +290,6 @@ def plot_loss(epoch_loss_avgbatch, wrk_dir):
         plt.savefig(os.path.join(wrk_dir, os.path.join(dsettype + ".pdf")))
         plt.close()
 
-
 def plot_xy(x, y, xlabel, ylabel, legend, fname, wrk_dir):
     plt.figure(figsize=(9, 6))
     plt.plot(x, y, 'r')
@@ -288,91 +300,9 @@ def plot_xy(x, y, xlabel, ylabel, legend, fname, wrk_dir):
     plt.savefig(os.path.join(wrk_dir, os.path.join(fname + ".pdf")))
     plt.close()
 
-def find_youdenj_threshold(ref_target, prob_poslabel, fig_dir=None):
-    fpr, tpr, thresholds = roc_curve(ref_target, prob_poslabel)
-    s_auc = roc_auc_score(ref_target, prob_poslabel)
-    thresholds[0] = 1
-    plt.figure(figsize=(9, 6))
-    plt.plot(fpr, tpr, 'b+', label=f'TPR vs FPR => AUC:{s_auc:.2}')
-    plt.xlabel('False positive rate')
-    plt.ylabel('True positive rate')
-    plt.title('ROC curve')
-    youden_indx = np.argmax(tpr - fpr) # the index where the difference between tpr and fpr is max
-    optimal_threshold = thresholds[youden_indx]
-    plt.plot(fpr[youden_indx], tpr[youden_indx], marker='o', markersize=3, color="red", label=f'optimal probability threshold:{optimal_threshold:.2}')
-    plt.legend(loc='best')
-    if fig_dir:
-        plt.savefig(f'{fig_dir}.pdf')
-        plt.close()
-    return fpr, tpr, thresholds, optimal_threshold
-
-def analyze_precision_recall_curve(ref_target, prob_poslabel, fig_dir=None):
-    pr, rec, thresholds = precision_recall_curve(ref_target, prob_poslabel)
-    avg_precision = average_precision_score(ref_target, prob_poslabel)
-    thresholds[0] = 1
-    plt.figure(figsize=(9, 6))
-    plt.plot(rec, pr, 'b+', label=f'Precision vs Recall => Average Precision (AP):{avg_precision:.2}')
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('Precision vs. recall curve')
-    indx = np.argmax(pr + rec)
-    print('indx', indx)
-    optimal_threshold = thresholds[indx]
-    plt.plot(rec[indx], pr[indx], marker='o', markersize=3, color="red", label=f'optimal probability threshold:{optimal_threshold:.2}')
-    plt.legend(loc='best')
-    if fig_dir:
-        plt.savefig(f'{fig_dir}.pdf')
-        plt.close()
-    return pr, rec, thresholds, optimal_threshold
-
 def delete_directory(directory):
     if(os.path.isdir(directory)):
         shutil.rmtree(directory)
-
-
-# code from keras https://github.com/keras-team/keras/blob/master/keras/utils/np_utils.py
-def to_categorical(y, num_classes=None, dtype='float32'):
-    """Converts a class vector (integers) to binary class matrix.
-    E.g. for use with categorical_crossentropy.
-    # Arguments
-        y: class vector to be converted into a matrix
-            (integers from 0 to num_classes).
-        num_classes: total number of classes.
-        dtype: The data type expected by the input, as a string
-            (`float32`, `float64`, `int32`...)
-    # Returns
-        A binary matrix representation of the input. The classes axis
-        is placed last.
-    # Example
-    ```python
-    # Consider an array of 5 labels out of a set of 3 classes {0, 1, 2}:
-    > labels
-    array([0, 2, 1, 2, 0])
-    # `to_categorical` converts this into a matrix with as many
-    # columns as there are classes. The number of rows
-    # stays the same.
-    > to_categorical(labels)
-    array([[ 1.,  0.,  0.],
-           [ 0.,  0.,  1.],
-           [ 0.,  1.,  0.],
-           [ 0.,  0.,  1.],
-           [ 1.,  0.,  0.]], dtype=float32)
-    ```
-    """
-
-    y = np.array(y, dtype='int')
-    input_shape = y.shape
-    if input_shape and input_shape[-1] == 1 and len(input_shape) > 1:
-        input_shape = tuple(input_shape[:-1])
-    y = y.ravel()
-    if not num_classes:
-        num_classes = np.max(y) + 1
-    n = y.shape[0]
-    categorical = np.zeros((n, num_classes), dtype=dtype)
-    categorical[np.arange(n), y] = 1
-    output_shape = input_shape + (num_classes,)
-    categorical = np.reshape(categorical, output_shape)
-    return categorical
 
 def format_bytes(size):
     # 2**10 = 1024

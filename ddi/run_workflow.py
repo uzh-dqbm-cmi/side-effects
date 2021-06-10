@@ -184,7 +184,7 @@ def run_ddi(data_partition, dsettypes, config, options, wrk_dir,
         else:
             class_weights = torch.tensor([1]*2).type(fdtype).to(device)  # weighting all casess equally
 
-    print("class weights", class_weights)
+    # print("class weights", class_weights)
     # binary cross entropy
     loss_bce = torch.nn.BCEWithLogitsLoss(pos_weight=class_weights, reduction='mean')
     loss_nlll = torch.nn.NLLLoss(weight=class_weights, reduction='mean')  # negative log likelihood loss
@@ -354,7 +354,7 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
     cld = construct_load_dataloaders(data_partition, dsettypes, dataloader_config, wrk_dir)
     # dictionaries by dsettypes
     data_loaders, epoch_loss_avgbatch, score_dict, class_weights, flog_out = cld
-    print(flog_out)
+    # print(flog_out)
     device = get_device(to_gpu, gpu_index)  # gpu device
     fdtype = options['fdtype']
 
@@ -363,7 +363,7 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
     else:
         class_weights = torch.tensor([1]*2).type(fdtype).to(device)  # weighting all casess equally
 
-    print("class weights", class_weights)
+    # print("class weights", class_weights)
     loss_func = torch.nn.NLLLoss(weight=class_weights, reduction='mean')  # negative log likelihood loss
     loss_contrastive = ContrastiveLoss(options.get('contrastiveloss_margin', 0.5), reduction='mean')
     loss_contrastive.type(fdtype).to(device)
@@ -401,10 +401,9 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
     for m, m_name in models:
         m.type(fdtype).to(device)
     
-    print('cool')
     if('train' in data_loaders):
         weight_decay = options.get('weight_decay', 1e-4)
-        print('weight_decay', weight_decay)
+        # print('weight_decay', weight_decay)
         # split model params into attn parameters and other params
         # models_param = add_weight_decay_except_attn([ddi_model, ddi_siamese], weight_decay)
         # see paper Cyclical Learning rates for Training Neural Networks for parameters' choice
@@ -415,7 +414,7 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
         c_step_size = int(np.ceil(5*num_iter))  # this should be 2-10 times num_iter
         base_lr = 3e-4
         max_lr = 5*base_lr  # 3-5 times base_lr
-        print('max lr', max_lr)
+        # print('max lr', max_lr)
         optimizer = torch.optim.Adam(models_param, weight_decay=weight_decay, lr=base_lr)
         cyc_scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr, max_lr, step_size_up=c_step_size,
                                                         mode='triangular', cycle_momentum=False)
@@ -432,6 +431,8 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
     ReaderWriter.dump_data(options, os.path.join(config_dir, 'exp_options.pkl'))
     # store attention weights for validation and test set
     seqid_fattnw_map = {dsettype: {'X_a':{}, 'X_b':{}} for dsettype in data_loaders if dsettype in {'test'}}
+    seqid_hattnw_map = {dsettype: {'X_a':{}, 'X_b':{}} for dsettype in data_loaders if dsettype in {'test'}}
+
     pair_names = ('a', 'b')
 
     for epoch in range(num_epochs):
@@ -469,13 +470,17 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
 
                 with torch.set_grad_enabled(dsettype == 'train'):
                     num_samples_perbatch = X_a.size(0)
-                    z_a, fattn_w_scores_a = ddi_model(X_a)
-                    z_b, fattn_w_scores_b = ddi_model(X_b)
+                    z_a, fattn_w_scores_a, hattn_w_scores_a = ddi_model(X_a)
+                    z_b, fattn_w_scores_b, hattn_w_scores_b = ddi_model(X_b)
 
                     if(dsettype in seqid_fattnw_map and model_config.pooling_mode == 'attn'):
                         for l, attn_scores in enumerate((fattn_w_scores_a, fattn_w_scores_b)):
                             suffix = pair_names[l]
                             seqid_fattnw_map[dsettype][f'X_{suffix}'].update({sid.item():attn_scores[c].detach().cpu() for c, sid in enumerate(ids)})
+                        
+                        for l, attn_scores in enumerate((hattn_w_scores_a, hattn_w_scores_b)):
+                            suffix = pair_names[l]
+                            seqid_hattnw_map[dsettype][f'X_{suffix}'].update({sid.item():attn_scores[c].detach().cpu() for c, sid in enumerate(ids)})
 
                     
                     logsoftmax_scores, dist = ddi_siamese(z_a, z_b)
@@ -520,6 +525,7 @@ def run_ddiTrf(data_partition, dsettypes, config, options, wrk_dir,
                 elif(dsettype == 'test'):
                     # dump attention weights for the test data
                     dump_dict_content(seqid_fattnw_map, ['test'], 'sampleid_fattnw_map', wrk_dir)
+                    dump_dict_content(seqid_hattnw_map, ['test'], 'sampleid_hattnw_map', wrk_dir)
                 if dsettype in {'test', 'validation'}:
                     predictions_df = build_predictions_df(ddi_ids, ref_class, pred_class, prob_scores_arr)
                     predictions_path = os.path.join(wrk_dir, f'predictions_{dsettype}.csv')
@@ -632,7 +638,7 @@ def get_best_config_from_hyperparamsearch(hyperparam_search_dir, num_folds=5, nu
         if(os.path.isfile(score_file)):
             try:
                 mscore = ReaderWriter.read_data(score_file)
-                print(mscore)
+                # print(mscore)
                 scores[config_num, 0] = mscore.best_epoch_indx
                 scores[config_num, 1] = mscore.s_precision
                 scores[config_num, 2] = mscore.s_recall
@@ -677,9 +683,13 @@ def train_val_run(datatensor_partitions, config_map, train_val_dir, fold_gpu_map
                     state_dict_dir=None, to_gpu=True, 
                     gpu_index=fold_gpu_map[fold_num])  
 
-
-
-def test_run(datatensor_partitions, config_map, train_val_dir, test_dir, fold_gpu_map, num_epochs=1):
+def test_run(datatensor_partitions, 
+             config_map, 
+             train_val_dir, 
+             test_dir, 
+             fold_gpu_map, 
+             suffix_testfname=None,
+             num_epochs=1):
     dsettypes = ['test']
     mconfig, options = config_map
     options['num_epochs'] = num_epochs  # override number of epochs using user specified value
@@ -692,7 +702,10 @@ def test_run(datatensor_partitions, config_map, train_val_dir, test_dir, fold_gp
         if os.path.exists(train_dir):
             # load state_dict pth
             state_dict_pth = os.path.join(train_dir, 'model_statedict')
-            path = os.path.join(test_dir, 'test', 'fold_{}'.format(fold_num))
+            if suffix_testfname:
+                path = os.path.join(test_dir, f'test_{suffix_testfname}', 'fold_{}'.format(fold_num))
+            else:
+                path = os.path.join(test_dir, 'test', 'fold_{}'.format(fold_num))
             test_wrk_dir = create_directory(path)
             if options.get('loss_func') == 'bceloss':
                 run_ddi(data_partition, dsettypes, mconfig, options, test_wrk_dir,
@@ -711,6 +724,17 @@ def train_test_partition(datatensor_partition, config_map, tr_val_dir, fold_gpu_
     train_val_run(datatensor_partition, config_map, tr_val_dir, fold_gpu_map, num_epochs=config_epochs)
     test_run(datatensor_partition, config_map, tr_val_dir, tr_val_dir, fold_gpu_map, num_epochs=1)
     
+def test_partition(datatensor_partition, config_map, tr_val_dir, fold_gpu_map, suffix_testfname):
+    config_epochs = config_map[0]['model_config'].num_epochs
+    print(config_epochs)
+    test_run(datatensor_partition, 
+             config_map, 
+             tr_val_dir, 
+             tr_val_dir, 
+             fold_gpu_map, 
+             suffix_testfname=suffix_testfname,
+             num_epochs=1)
+
 def train_test_hyperparam_conf(hyperparam_comb, gpu_num, datatensor_partition, fold_gpu_map, exp_dir, num_drugs, queue, exp_iden):
     text_to_save = str(hyperparam_comb) 
     print("hyperparam_comb:", text_to_save, "gpu num:", str(gpu_num))
